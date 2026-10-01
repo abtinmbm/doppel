@@ -1,46 +1,63 @@
+"""Prints the hold time of every key press.
+
+For each physical key press, prints how long the key stayed down, in
+milliseconds. Key names are never printed. Press Esc to stop.
+
+How it works:
+    1. When a key goes down, its press time is stored in `held`, labelled by
+       the key.
+    2. While a key is held, Windows sends repeated key-down events with no
+       key-up between them. A down event for a key already in `held` is one
+       of these repeats and is ignored, so each physical press is counted once.
+    3. When a key goes up, its entry is removed from `held`. The hold time is
+       the release time minus the stored press time. Matching by key keeps the
+       result correct when keys overlap (down, down, up, up).
+    4. Key identities exist in memory only while the key is down.
+"""
+
 import time
 
 from pynput import keyboard
 
-# Keys that are down RIGHT NOW.
+# Keys that are down right now.
 # Each entry is: key -> the time (in nanoseconds) it went down.
-# Key identities live here only until the key is released.
 held = {}
 
 
 def on_press(key):
-    # pynput calls this every time a key goes DOWN.
-    # Read the stopwatch first so the timestamp is as accurate as possible.
+    """Record the press time of a key that has just gone down."""
     now = time.perf_counter_ns()
 
-    # If this key is already in held, Windows is auto-repeating it
-    # (you're holding it). It's not a new press, so ignore it.
+    # A key already in held is being auto-repeated, not pressed again.
     if key in held:
         return
 
-    # Brand new press: remember when it went down.
     held[key] = now
 
 
 def on_release(key):
-    # pynput calls this every time a key goes UP.
+    """Print the hold time of the key that has just come up.
+
+    Returns False when Esc is released, which stops the listener.
+    """
     now = time.perf_counter_ns()
 
-    # Remove this key from held and get back when it went down.
-    # Gives None if we never saw it go down (e.g. it was already
-    # held when the script started).
+    # Remove the key and get back its press time. This is None if the key was
+    # already down before the script started, in which case there is nothing
+    # to measure.
     down_time = held.pop(key, None)
 
     if down_time is not None:
-        # Time between down and up, converted from ns to ms.
+        # Press-to-release time, converted from nanoseconds to milliseconds.
         hold = (now - down_time) / 1_000_000
-        print("hold:", round(hold, 1), "ms")  # never prints which key
+        print("hold:", round(hold, 1), "ms")
 
-    # `key` is only used to check for Esc. We don't print or store it.
+    # The key is only compared against Esc. It is never printed or stored.
     if key == keyboard.Key.esc:
-        return False  # returning False stops the listener
+        return False
 
 
-# Start listening on a background thread and hook up our two functions.
+# Run the listener on a background thread. join() keeps the script alive
+# until a callback returns False.
 with keyboard.Listener(on_press=on_press, on_release=on_release) as listener:
-    listener.join()  # keep the script alive until Esc is pressed
+    listener.join()
