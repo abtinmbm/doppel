@@ -108,7 +108,8 @@ assert records == [KeystrokeRecord((True, 0), 90.0, 200.0, 110.0)], records
 # this letter as "A" on press and "a" on release; with key codes both events
 # are the same key, so nothing gets stuck.
 #   Shift -> a: overlap, finished when Shift is released at 150:
-#               hold 150, dd 100, ud 100 - 150 = -50. Label None (Shift).
+#               hold 150, dd 100, ud 100 - 150 = -50. Label ("shift", "left")
+#               (a is on the left half).
 #   a -> b:     a (0.25, 1) to b (4.75, 2) is 4.61 key widths: far;
 #               both on the left half. hold 180 - 100 = 80, dd 300 - 100 = 200,
 #               ud 300 - 180 = 120.
@@ -125,7 +126,7 @@ records = feed(
     ],
 )
 assert records == [
-    KeystrokeRecord(None, 150.0, 100.0, -50.0),  # Shift -> a
+    KeystrokeRecord(("shift", "left"), 150.0, 100.0, -50.0),  # Shift -> a
     KeystrokeRecord((True, 3), 80.0, 200.0, 120.0),  # a -> b
 ], records
 assert collector.held == {} and collector.pending == {}

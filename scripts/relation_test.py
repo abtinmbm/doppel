@@ -15,6 +15,9 @@ def k(ch):
 
 SHIFT = 0xA0  # left Shift
 DIGIT_1 = 0x31  # the "1" key
+SPACE = 0x20
+BACKSPACE = 0x08
+ENTER = 0x0D
 
 # Different halves, 4 key widths apart: far.
 assert relation(k("t"), k("o")) == (False, 3)
@@ -34,8 +37,16 @@ assert relation(k("q"), k("p")) == (False, 3)
 # t (4, 0) to a (0.25, 1) is 3.88 key widths: far; both on the left half.
 assert relation(k("t"), k("a")) == (True, 3)
 
-# A key with no letter (Shift, digits) has no position, so there is no label.
-assert relation(k("a"), SHIFT) is None
-assert relation(DIGIT_1, k("a")) is None
+# If either key is not a letter, the label is the kind of each key. Letters
+# become their half of the keyboard: a is on the left, h and o on the right.
+assert relation(k("a"), SHIFT) == ("left", "shift")
+assert relation(SHIFT, k("h")) == ("shift", "right")
+assert relation(k("o"), SPACE) == ("right", "space")
+assert relation(SPACE, k("t")) == ("space", "left")
+assert relation(BACKSPACE, ENTER) == ("backspace", "enter")
+
+# Keys without their own kind (digits, punctuation, Ctrl...) are "other".
+assert relation(DIGIT_1, k("a")) == ("other", "left")
+assert relation(SPACE, SPACE) == ("space", "space")
 
 print("All relation checks passed.")

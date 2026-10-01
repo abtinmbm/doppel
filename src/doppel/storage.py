@@ -9,8 +9,10 @@ How it works:
     2. flush():
        a. Shuffles the buffer using the operating system's cryptographic
           random number generator, so the typing order is not kept.
-       b. Converts each record to a list [same_half, bucket, hold, dd, ud]
-          and the whole batch to JSON bytes.
+       b. Converts each record to a list [label1, label2, hold, dd, ud],
+          where (label1, label2) is the record's label: (same_half, bucket)
+          such as [false, 2, ...], or two key kinds such as
+          ["space", "left", ...]. The whole batch becomes JSON bytes.
        c. Encrypts the JSON with AES-GCM using a fresh random 12-byte nonce.
           The day is passed as associated data: it is stored unencrypted, but
           decryption fails if it is changed.
@@ -50,20 +52,18 @@ _shuffle_rng = secrets.SystemRandom()
 def _record_to_row(record: KeystrokeRecord) -> list:
     """Convert a record to a flat list that JSON can store.
 
-    A None label becomes None for both same_half and bucket.
+    Both label shapes are pairs, so the label becomes the first two values.
+    JSON keeps true/false, numbers and strings apart, so the label comes back
+    with the same types.
     """
-    if record.label is None:
-        same_half, bucket = None, None
-    else:
-        same_half, bucket = record.label
-    return [same_half, bucket, record.hold_ms, record.dd_ms, record.ud_ms]
+    label1, label2 = record.label
+    return [label1, label2, record.hold_ms, record.dd_ms, record.ud_ms]
 
 
 def _row_to_record(row: list) -> KeystrokeRecord:
     """Convert a flat list from JSON back into a record."""
-    same_half, bucket, hold_ms, dd_ms, ud_ms = row
-    label = None if same_half is None else (same_half, bucket)
-    return KeystrokeRecord(label, hold_ms, dd_ms, ud_ms)
+    label1, label2, hold_ms, dd_ms, ud_ms = row
+    return KeystrokeRecord((label1, label2), hold_ms, dd_ms, ud_ms)
 
 
 class RecordStore:

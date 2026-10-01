@@ -21,7 +21,7 @@ key = AESGCM.generate_key(bit_length=256)
 originals = [
     KeystrokeRecord((False, 2), 146.9, 259.4, 112.5),
     KeystrokeRecord((True, 0), 104.2, 173.9, 69.7),
-    KeystrokeRecord(None, 76.5, 93.0, 16.5),
+    KeystrokeRecord(("right", "space"), 76.5, 93.0, 16.5),
     KeystrokeRecord((False, 3), 129.0, 130.3, 1.3),
     KeystrokeRecord((True, 1), 94.2, 182.2, 88.0),
 ]
@@ -41,6 +41,13 @@ loaded = store.load_all()
 store.close()
 assert len(loaded) == 5
 assert set(loaded) == set(originals)
+
+# Both label shapes come back with their types. This is checked separately
+# because Python treats False == 0, so the comparison above would not notice
+# a label turning from (False, 2) into (0, 2).
+by_hold = {r.hold_ms: r for r in loaded}
+assert by_hold[146.9].label[0] is False and by_hold[146.9].label[1] == 2
+assert by_hold[76.5].label == ("right", "space")
 
 # The database file contains no readable timings.
 assert b"146.9" not in path.read_bytes()

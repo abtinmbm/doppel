@@ -1,9 +1,10 @@
-"""Keyboard identity and geometry for Doppel.
+"""Keyboard identity, geometry and key kinds for Doppel.
 
 Identifies each key by its Windows virtual key code, and converts a pair of
-consecutive keys into a coarse label based on where the keys sit on a QWERTY
-keyboard. Key codes and letters are used only in memory while the label is
-computed; the label is the only value meant to leave this module.
+consecutive keys into a coarse label: where the keys sit on a QWERTY keyboard
+when both are letters, or what kind of key each one is otherwise. Key codes
+and letters are used only in memory while the label is computed; the label is
+the only value meant to leave this module.
 
 How it works:
     1. key_id() reads the virtual key code (vk) from a pynput key. The vk
@@ -23,7 +24,14 @@ How it works:
        is coarse and shared by many different letter pairs.
     6. Each key is also tagged left or right of the keyboard's centre. Two keys
        are on the "same half" when their tags match.
-    7. The label for a pair of keys is (same_half, bucket).
+    7. The label for a pair of letters is (same_half, bucket).
+    8. If either key is not a letter, the label is instead the kind of each
+       key: "left" or "right" for a letter (its half of the keyboard),
+       "space", "shift", "backspace", "enter", or "other" for everything else
+       (digits, punctuation, Ctrl, arrows...). Example: "o" then Space gives
+       ("right", "space"). This keeps pairs around Space and Shift, which are
+       very frequent and personal, in separate groups without recording which
+       letters were typed.
 
 Limitation:
     The vk follows the keyboard layout's letter, not the physical position.
@@ -32,6 +40,8 @@ Limitation:
 """
 
 import math
+
+from doppel.records import Label
 
 # Letters on each row, from top to bottom.
 ROWS = ["qwertyuiop", "asdfghjkl", "zxcvbnm"]
@@ -46,6 +56,18 @@ LEFT_HALF = set("qwertasdfgzxcvb")
 # are the other letters, in alphabetical order.
 VK_A = 0x41
 VK_Z = 0x5A
+
+# Kinds of the non-letter keys that get their own kind. The codes are the
+# same in Windows and in browsers (JavaScript key codes), except that the
+# Windows keyboard hook reports left and right Shift separately.
+SPECIAL_KINDS = {
+    0x20: "space",
+    0x10: "shift",  # Shift (browsers, and Windows' generic code)
+    0xA0: "shift",  # left Shift (Windows)
+    0xA1: "shift",  # right Shift (Windows)
+    0x08: "backspace",
+    0x0D: "enter",
+}
 
 # Build the lookup table: letter -> (x, y).
 # For each letter, x is its index within its row plus that row's offset,
@@ -100,22 +122,36 @@ def distance_bucket(distance: float) -> int:
         return 3
 
 
-def relation(prev_vk: int, vk: int) -> tuple[bool, int] | None:
-    """Return (same_half, bucket) for two consecutive keys.
+def key_kind(vk: int) -> str:
+    """Return the kind of a key: "left"/"right" for a letter, else its kind.
+
+    Letters are tagged with their half of the keyboard. Space, Shift,
+    Backspace and Enter have their own kinds; every other key is "other".
+    """
+    letter = vk_letter(vk)
+    if letter is not None:
+        return "left" if letter in LEFT_HALF else "right"
+    return SPECIAL_KINDS.get(vk, "other")
+
+
+def relation(prev_vk: int, vk: int) -> Label:
+    """Return the label for two consecutive keys.
 
     Args:
         prev_vk: virtual key code of the first key.
         vk: virtual key code of the second key.
 
     Returns:
-        same_half: True if both keys are on the same side of the keyboard.
-        bucket:    distance bucket between the two keys (see distance_bucket).
-        None if either key is not a letter.
+        For two letters, (same_half, bucket):
+            same_half: True if both keys are on the same side of the keyboard.
+            bucket:    distance bucket between the two keys (see
+                       distance_bucket).
+        Otherwise (kind of first key, kind of second key), see key_kind.
     """
     prev_char = vk_letter(prev_vk)
     char = vk_letter(vk)
     if prev_char is None or char is None:
-        return None
+        return (key_kind(prev_vk), key_kind(vk))
 
     # Look up each key's (x, y) position and unpack it into two variables.
     x1, y1 = KEY_POS[prev_char]

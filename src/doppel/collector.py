@@ -47,12 +47,23 @@ Stale keys:
     reset() clears all state at once. The live app calls it before locking
     the screen, since the releases of keys held at that moment will be lost.
 
+Labels:
+    A pair's label comes from label_fn(first key, second key). Doppel always
+    uses the default, keymap.relation(), which returns only a coarse
+    geometry label. Offline experiments on public datasets can pass another
+    function (for example one returning the key pair itself) to compare
+    labelling schemes.
+
 Privacy:
     Key codes are held in memory only. A key stays in `held` and `pending`
     until it is released or dropped, and in prev_key until the next press
-    replaces it. Records contain only timings and the coarse label from
-    keymap.relation().
+    replaces it. With the default label_fn, records contain only timings and
+    the coarse label from keymap.relation(). A label_fn that returns key
+    identities must never be used on live data.
 """
+
+from collections.abc import Callable
+from typing import Any
 
 from doppel.keymap import relation
 from doppel.records import KeystrokeRecord
@@ -72,7 +83,12 @@ STALE_MS = 2000.0
 class KeystrokeCollector:
     """Builds KeystrokeRecords from a stream of key events."""
 
-    def __init__(self, max_gap_ms: float = MAX_GAP_MS, stale_ms: float = STALE_MS):
+    def __init__(
+        self,
+        max_gap_ms: float = MAX_GAP_MS,
+        stale_ms: float = STALE_MS,
+        label_fn: Callable[[int, int], Any] = relation,
+    ):
         """Start with no keys held and no previous press.
 
         Args:
@@ -80,16 +96,19 @@ class KeystrokeCollector:
                 that still counts as one pair.
             stale_ms: how long a held key can go unseen, in milliseconds,
                 before it is assumed released.
+            label_fn: computes a pair's label from the two key codes. Live
+                Doppel uses the default (keymap.relation); see "Labels".
         """
         self.max_gap_ns = max_gap_ms * NS_PER_MS
         self.stale_ns = stale_ms * NS_PER_MS
+        self.label_fn = label_fn
 
         # Keys that are down right now: key -> (press time, last seen time), ns.
         self.held: dict[int, tuple[int, int]] = {}
 
         # Pairs waiting for their first key to be released:
         # first key -> (label, first key's press time, second key's press time).
-        self.pending: dict[int, tuple[tuple[bool, int] | None, int, int]] = {}
+        self.pending: dict[int, tuple[Any, int, int]] = {}
 
         # The previous press. prev_up is None while that key is still down.
         self.prev_key: int | None = None
@@ -123,7 +142,7 @@ class KeystrokeCollector:
         # This press forms a pair with the previous one, unless there is no
         # previous press or the gap between them is too long.
         if self.prev_key is not None and t - self.prev_down <= self.max_gap_ns:
-            label = relation(self.prev_key, key)
+            label = self.label_fn(self.prev_key, key)
 
             if self.prev_up is not None:
                 # The previous key was already released: all times are known.
@@ -200,7 +219,7 @@ class KeystrokeCollector:
                     self.prev_up = None
 
     def _make_record(
-        self, label: tuple[bool, int] | None, k1_down: int, k1_up: int, k2_down: int
+        self, label: Any, k1_down: int, k1_up: int, k2_down: int
     ) -> KeystrokeRecord:
         """Build a record from the three event times of a pair (all in ns)."""
         hold_ms = (k1_up - k1_down) / NS_PER_MS

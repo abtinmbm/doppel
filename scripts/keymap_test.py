@@ -2,13 +2,14 @@
 
 Confirms the position of two letters, that every letter appears exactly once
 in the table, which half of the keyboard two letters belong to, that key_id()
-gives one id per physical key whatever modifiers are held, and that
-vk_letter() maps only the letter keys to letters.
+gives one id per physical key whatever modifiers are held, that vk_letter()
+maps only the letter keys to letters, and that key_kind() gives each key its
+kind.
 """
 
 from pynput.keyboard import Key, KeyCode
 
-from doppel.keymap import KEY_POS, LEFT_HALF, ROWS, key_id, vk_letter
+from doppel.keymap import KEY_POS, LEFT_HALF, ROWS, key_id, key_kind, vk_letter
 
 # "t" is column 4 of the top row, which has no offset.
 assert KEY_POS["t"] == (4.0, 0), KEY_POS["t"]
@@ -52,5 +53,18 @@ assert vk_letter(0x40) is None
 assert vk_letter(0x5B) is None
 assert vk_letter(0x31) is None  # the "1" key
 assert vk_letter(0xA0) is None  # left Shift
+
+# Key kinds: letters by half of the keyboard; Shift in all three codes (the
+# generic 0x10 used by browsers, and Windows' left 0xA0 and right 0xA1);
+# Space, Backspace and Enter; everything else (here "1" and Ctrl) is "other".
+assert key_kind(0x41) == "left"  # a
+assert key_kind(0x47) == "left"  # g
+assert key_kind(0x48) == "right"  # h
+assert key_kind(0x10) == key_kind(0xA0) == key_kind(0xA1) == "shift"
+assert key_kind(0x20) == "space"
+assert key_kind(0x08) == "backspace"
+assert key_kind(0x0D) == "enter"
+assert key_kind(0x31) == "other"  # the "1" key
+assert key_kind(0x11) == "other"  # Ctrl
 
 print("All keymap checks passed.")
