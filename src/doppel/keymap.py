@@ -1,20 +1,34 @@
-"""Keyboard geometry for Doppel.
+"""Keyboard identity and geometry for Doppel.
 
-Converts a pair of consecutive keys into a coarse label based on where the
-keys sit on a QWERTY keyboard. Letters are used only in memory while the label
-is computed; the label is the only value meant to leave this module.
+Identifies each key by its Windows virtual key code, and converts a pair of
+consecutive keys into a coarse label based on where the keys sit on a QWERTY
+keyboard. Key codes and letters are used only in memory while the label is
+computed; the label is the only value meant to leave this module.
 
 How it works:
-    1. Each letter gets an (x, y) position on the keyboard, measured in key
+    1. key_id() reads the virtual key code (vk) from a pynput key. The vk
+       names the physical key and does not change with Shift, Ctrl or Caps
+       Lock, so a key's press and release always get the same id. (pynput's
+       own key objects compare by character, so "A" on press and "a" on
+       release would look like two different keys.)
+    2. vk_letter() converts a vk to its letter. Windows gives the letter keys
+       A-Z the codes 0x41-0x5A, which are the same numbers as the ASCII
+       codes for "A"-"Z", so chr() recovers the letter.
+    3. Each letter gets an (x, y) position on the keyboard, measured in key
        widths. y is the row (0 = top). x is the column plus a per-row offset,
        because each lower row is shifted right on a real keyboard.
-    2. The distance between two keys is the straight-line distance between
+    4. The distance between two keys is the straight-line distance between
        their positions: sqrt((x2 - x1)^2 + (y2 - y1)^2).
-    3. The distance is converted to one of four buckets, so the stored value
+    5. The distance is converted to one of four buckets, so the stored value
        is coarse and shared by many different letter pairs.
-    4. Each key is also tagged left or right of the keyboard's centre. Two keys
+    6. Each key is also tagged left or right of the keyboard's centre. Two keys
        are on the "same half" when their tags match.
-    5. The label for a pair of keys is (same_half, bucket).
+    7. The label for a pair of keys is (same_half, bucket).
+
+Limitation:
+    The vk follows the keyboard layout's letter, not the physical position.
+    On a QWERTY layout the two are the same; on another layout the positions
+    in KEY_POS would be wrong.
 """
 
 import math
@@ -28,10 +42,15 @@ STAGGER = [0.0, 0.25, 0.75]
 # Letters on the left side of the keyboard. All other letters are on the right.
 LEFT_HALF = set("qwertasdfgzxcvb")
 
+# Windows virtual key codes of the letter keys A and Z. The codes in between
+# are the other letters, in alphabetical order.
+VK_A = 0x41
+VK_Z = 0x5A
+
 # Build the lookup table: letter -> (x, y).
 # For each letter, x is its index within its row plus that row's offset,
 # and y is the index of its row. enumerate() supplies the indexes.
-KEY_POS = {}
+KEY_POS: dict[str, tuple[float, int]] = {}
 for row_index, letters in enumerate(ROWS):
     for col_index, ch in enumerate(letters):
         x = col_index + STAGGER[row_index]
@@ -39,24 +58,34 @@ for row_index, letters in enumerate(ROWS):
         KEY_POS[ch] = (x, y)
 
 
-def key_char(key):
-    """Return the lowercase letter for a pynput key, or None if it is not a letter.
+def key_id(key: object) -> int | None:
+    """Return the virtual key code of a pynput key, or None if it has none.
 
-    Keys without a `.char` attribute (Shift, Enter, arrows) return None.
-    Uppercase letters are converted to lowercase, so Shift+T maps to "t".
+    Letter and symbol keys arrive as KeyCode objects, which carry .vk.
+    Special keys (Shift, Space, Enter) arrive as members of the Key enum,
+    whose .value is a KeyCode carrying .vk. Left and right Shift have
+    different codes, so they stay separate keys.
     """
-    char = getattr(key, "char", None)
-    if char is None:
-        return None
-    char = char.lower()
-
-    # Characters outside KEY_POS (digits, punctuation) have no position.
-    if char not in KEY_POS:
-        return None
-    return char
+    vk = getattr(key, "vk", None)
+    if vk is None:
+        # Key enum members keep their KeyCode in .value.
+        value = getattr(key, "value", None)
+        vk = getattr(value, "vk", None)
+    return vk
 
 
-def distance_bucket(distance):
+def vk_letter(vk: int) -> str | None:
+    """Return the lowercase letter for a virtual key code, or None.
+
+    Only the letter keys A-Z have a letter. Every other key (digits,
+    punctuation, Shift, Space) returns None.
+    """
+    if VK_A <= vk <= VK_Z:
+        return chr(vk).lower()
+    return None
+
+
+def distance_bucket(distance: float) -> int:
     """Convert a distance in key widths into a bucket.
 
     0 = same key, 1 = neighbour (up to 1.5), 2 = near (up to 3.5), 3 = far.
@@ -71,15 +100,20 @@ def distance_bucket(distance):
         return 3
 
 
-def relation(prev_key, key):
+def relation(prev_vk: int, vk: int) -> tuple[bool, int] | None:
     """Return (same_half, bucket) for two consecutive keys.
 
-    same_half: True if both keys are on the same side of the keyboard.
-    bucket:    distance bucket between the two keys (see distance_bucket).
-    Returns None if either key is not a letter.
+    Args:
+        prev_vk: virtual key code of the first key.
+        vk: virtual key code of the second key.
+
+    Returns:
+        same_half: True if both keys are on the same side of the keyboard.
+        bucket:    distance bucket between the two keys (see distance_bucket).
+        None if either key is not a letter.
     """
-    prev_char = key_char(prev_key)
-    char = key_char(key)
+    prev_char = vk_letter(prev_vk)
+    char = vk_letter(vk)
     if prev_char is None or char is None:
         return None
 

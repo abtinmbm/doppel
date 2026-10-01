@@ -6,10 +6,16 @@ produces one KeystrokeRecord for each pair of consecutive key presses
 supplies both, so the same logic can be driven by a live listener or by a
 scripted sequence of events in tests.
 
+Keys are identified by their virtual key code (an int, see keymap.key_id),
+which stays the same whether Shift, Ctrl or Caps Lock is active. This
+guarantees that a key's press and its release are recognised as the same key.
+
 How it works:
-    1. `held` maps each key that is down right now to its press time. A
-       down event for a key already in `held` is an auto-repeat and is
-       ignored, so each physical press is counted once.
+    1. `held` maps each key that is down right now to two times: when it was
+       pressed, and when it was last seen (its press or its latest
+       auto-repeat). A down event for a key already in `held` is an
+       auto-repeat: it only updates "last seen" and produces nothing, so each
+       physical press is counted once.
     2. The previous press is remembered as prev_key, prev_down and prev_up
        (prev_up is None while that key is still down).
     3. When a key goes down, it forms a pair with the previous press. The
@@ -23,10 +29,29 @@ How it works:
     6. A key can be the first key of only one pair (the next press), so each
        event produces at most one record.
 
+Stale keys:
+    Sometimes a release is never seen, for example when the screen locks
+    while a key is down. Without cleanup that key would stay in `held`
+    forever and every later press of it would be ignored as an auto-repeat.
+    Windows repeats the most recently pressed key about every 30 ms after an
+    initial delay of about 500 ms, so a key that is really held keeps being
+    seen. On every press, any held key not seen for more than stale_ms is
+    dropped, together with its pending pair; if it was the previous press,
+    that is forgotten too, so no pair is formed with it.
+
+    Cost: Windows stops repeating a key once another key is pressed. A key
+    held for longer than stale_ms while other keys are typed (for example
+    Shift over a long capitalised phrase) is dropped too. Its own pair is
+    lost and its release is ignored; all other records are unaffected.
+
+    reset() clears all state at once. The live app calls it before locking
+    the screen, since the releases of keys held at that moment will be lost.
+
 Privacy:
-    Keys are held in memory only. A key stays in `held` and `pending` until
-    it is released, and in prev_key until the next press replaces it.
-    Records contain only timings and the coarse label from keymap.relation().
+    Key codes are held in memory only. A key stays in `held` and `pending`
+    until it is released or dropped, and in prev_key until the next press
+    replaces it. Records contain only timings and the coarse label from
+    keymap.relation().
 """
 
 from doppel.keymap import relation
@@ -38,39 +63,59 @@ NS_PER_MS = 1_000_000
 # Pairs whose presses are further apart than this are not recorded.
 MAX_GAP_MS = 2000.0
 
+# A held key not seen (pressed or auto-repeated) for longer than this is
+# assumed to have been released without the release being seen. Measured
+# auto-repeat: first repeat after 500.1 ms, then one every 30-47 ms.
+STALE_MS = 2000.0
+
 
 class KeystrokeCollector:
     """Builds KeystrokeRecords from a stream of key events."""
 
-    def __init__(self, max_gap_ms=MAX_GAP_MS):
+    def __init__(self, max_gap_ms: float = MAX_GAP_MS, stale_ms: float = STALE_MS):
         """Start with no keys held and no previous press.
 
         Args:
             max_gap_ms: longest gap between two presses, in milliseconds,
                 that still counts as one pair.
+            stale_ms: how long a held key can go unseen, in milliseconds,
+                before it is assumed released.
         """
         self.max_gap_ns = max_gap_ms * NS_PER_MS
+        self.stale_ns = stale_ms * NS_PER_MS
 
-        # Keys that are down right now: key -> press time (ns).
-        self.held = {}
+        # Keys that are down right now: key -> (press time, last seen time), ns.
+        self.held: dict[int, tuple[int, int]] = {}
 
         # Pairs waiting for their first key to be released:
         # first key -> (label, first key's press time, second key's press time).
-        self.pending = {}
+        self.pending: dict[int, tuple[tuple[bool, int] | None, int, int]] = {}
 
         # The previous press. prev_up is None while that key is still down.
-        self.prev_key = None
-        self.prev_down = None
-        self.prev_up = None
+        self.prev_key: int | None = None
+        self.prev_down: int = 0
+        self.prev_up: int | None = None
 
-    def key_down(self, key, t):
+    def key_down(self, key: int, t: int) -> KeystrokeRecord | None:
         """Handle a key press at time t (ns).
 
-        Returns a KeystrokeRecord if this press completes a pair whose first
-        key was already released, otherwise None.
+        Args:
+            key: virtual key code of the key.
+            t: time of the event in nanoseconds.
+
+        Returns:
+            A KeystrokeRecord if this press completes a pair whose first key
+            was already released, otherwise None.
         """
-        # Auto-repeat events are ignored before any state is changed.
+        # Forget keys whose release was missed, before deciding whether this
+        # event is an auto-repeat. Otherwise a key whose release was lost
+        # would be treated as auto-repeating forever.
+        self._drop_stale(t)
+
+        # Auto-repeat: the key is still held. Only note that it was seen.
         if key in self.held:
+            down_time = self.held[key][0]
+            self.held[key] = (down_time, t)
             return None
 
         record = None
@@ -94,19 +139,24 @@ class KeystrokeCollector:
         self.prev_up = None
 
         # held is updated last so the checks above only see earlier keys.
-        self.held[key] = t
+        self.held[key] = (t, t)
         return record
 
-    def key_up(self, key, t):
+    def key_up(self, key: int, t: int) -> KeystrokeRecord | None:
         """Handle a key release at time t (ns).
 
-        Returns a KeystrokeRecord if a pair was waiting on this key's
-        release, otherwise None.
+        Args:
+            key: virtual key code of the key.
+            t: time of the event in nanoseconds.
+
+        Returns:
+            A KeystrokeRecord if a pair was waiting on this key's release,
+            otherwise None.
         """
-        # A key that was already down before the collector started has no
-        # press time, so its release is ignored.
-        down_time = self.held.pop(key, None)
-        if down_time is None:
+        # A key that was down before the collector started, or was dropped as
+        # stale, has no press time, so its release is ignored.
+        entry = self.held.pop(key, None)
+        if entry is None:
             return None
 
         # If this is the most recent press, remember when it was released so
@@ -115,14 +165,43 @@ class KeystrokeCollector:
             self.prev_up = t
 
         # If a later press overlapped this key, its pair can now be finished.
-        entry = self.pending.pop(key, None)
-        if entry is None:
+        waiting = self.pending.pop(key, None)
+        if waiting is None:
             return None
 
-        label, k1_down, k2_down = entry
+        label, k1_down, k2_down = waiting
         return self._make_record(label, k1_down, t, k2_down)
 
-    def _make_record(self, label, k1_down, k1_up, k2_down):
+    def reset(self) -> None:
+        """Forget every held key, waiting pair and the previous press.
+
+        Called before the screen is locked: releases that happen while it is
+        locked are not seen, so the current state would become stale.
+        """
+        self.held.clear()
+        self.pending.clear()
+        self.prev_key = None
+        self.prev_down = 0
+        self.prev_up = None
+
+    def _drop_stale(self, t: int) -> None:
+        """Drop held keys not seen for longer than stale_ns before time t."""
+        # list() makes a copy of the keys, because entries are deleted from
+        # held inside the loop.
+        for key in list(self.held):
+            last_seen = self.held[key][1]
+            if t - last_seen > self.stale_ns:
+                del self.held[key]
+                # Its waiting pair can never be finished.
+                self.pending.pop(key, None)
+                # Its release will never be seen, so no pair can use it.
+                if key == self.prev_key:
+                    self.prev_key = None
+                    self.prev_up = None
+
+    def _make_record(
+        self, label: tuple[bool, int] | None, k1_down: int, k1_up: int, k2_down: int
+    ) -> KeystrokeRecord:
         """Build a record from the three event times of a pair (all in ns)."""
         hold_ms = (k1_up - k1_down) / NS_PER_MS
         dd_ms = (k2_down - k1_down) / NS_PER_MS
