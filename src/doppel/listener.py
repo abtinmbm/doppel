@@ -15,20 +15,33 @@ How it works:
     4. The code and the time go to the collector, which returns a
        KeystrokeRecord or None. Records are passed to on_record; keys are
        never passed on.
+    5. run_and_store() passes every record to a StorageWriter, which
+       encrypts and writes it on a background thread, so the keyboard
+       callbacks only ever put a record on a queue.
+
+Usage:
+    uv run python -m doppel.listener                  print records only
+    uv run python -m doppel.listener --store          also store them in data/doppel.db
+    uv run python -m doppel.listener --store PATH     store them in PATH instead
 
 Development only:
     Releasing Esc stops the listener. This must be removed before the live
     app, where it would be an off switch for anyone at the keyboard.
 """
 
+import argparse
 import time
 from collections.abc import Callable
+from pathlib import Path
 
 from pynput import keyboard
 
 from doppel.collector import KeystrokeCollector
 from doppel.keymap import key_id
+from doppel.keystore import get_or_create_key
 from doppel.records import KeystrokeRecord
+from doppel.storage import DB_PATH
+from doppel.writer import StorageWriter
 
 
 def print_record(record: KeystrokeRecord) -> None:
@@ -75,5 +88,49 @@ def run(on_record: Callable[[KeystrokeRecord], None] = print_record) -> None:
         listener.join()
 
 
+def run_and_store(path: Path = DB_PATH, echo: bool = True) -> int:
+    """Listen until Esc is released, storing every record encrypted.
+
+    The key is loaded here, before listening starts, so a key problem shows
+    up immediately. The writer is stopped in a finally block, so the last,
+    partial batch is saved even if the listener stops with an error.
+
+    Args:
+        path: database file.
+        echo: also print each record.
+
+    Returns:
+        The number of records stored.
+    """
+    writer = StorageWriter(get_or_create_key(), path)
+    count = 0
+
+    def on_record(record: KeystrokeRecord) -> None:
+        nonlocal count  # count lives in run_and_store, not in this function
+        count += 1
+        if echo:
+            print_record(record)
+        writer.submit(record)
+
+    try:
+        run(on_record=on_record)
+    finally:
+        writer.stop()
+    return count
+
+
 if __name__ == "__main__":
-    run()
+    parser = argparse.ArgumentParser(description="Live keyboard listener (Esc stops it).")
+    parser.add_argument(
+        "--store",
+        nargs="?",
+        const=str(DB_PATH),
+        metavar="PATH",
+        help=f"also store records, encrypted (default path: {DB_PATH})",
+    )
+    args = parser.parse_args()
+    if args.store:
+        stored = run_and_store(Path(args.store))
+        print(f"Stored {stored} records in {args.store}.")
+    else:
+        run()
