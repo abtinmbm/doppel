@@ -2,7 +2,7 @@
 
 Installs a pynput keyboard hook, timestamps every key event with a monotonic
 nanosecond clock, and passes it to the collector. Each record the collector
-produces is handed to a callback. Press Esc to stop.
+produces is handed to a callback.
 
 How it works:
     1. pynput calls on_press for every key-down and on_release for every
@@ -18,15 +18,22 @@ How it works:
     5. run_and_store() passes every record to a StorageWriter, which
        encrypts and writes it on a background thread, so the keyboard
        callbacks only ever put a record on a queue.
+    6. The main thread waits for the hook in half-second steps rather than
+       one long join(): on Windows a plain join() can keep Ctrl+C from
+       reaching Python, and Ctrl+C is how a collection run is stopped.
+
+Stopping:
+    Print-only mode stops when Esc is released (development only; in the
+    live app that would be an off switch for anyone at the keyboard).
+    Storing mode ignores Esc, which is pressed constantly in normal work,
+    and stops with Ctrl+C in its terminal window. Either way the writer is
+    stopped in a finally block, so the last batch is saved.
 
 Usage:
-    uv run python -m doppel.listener                  print records only
-    uv run python -m doppel.listener --store          also store them in data/doppel.db
-    uv run python -m doppel.listener --store PATH     store them in PATH instead
-
-Development only:
-    Releasing Esc stops the listener. This must be removed before the live
-    app, where it would be an off switch for anyone at the keyboard.
+    uv run python -m doppel.listener                          print records; Esc stops
+    uv run python -m doppel.listener --store                  store in data/doppel.db; Ctrl+C stops
+    uv run python -m doppel.listener --store PATH             store in PATH instead
+    uv run python -m doppel.listener --store --quiet          store without printing records
 """
 
 import argparse
@@ -54,11 +61,19 @@ def print_record(record: KeystrokeRecord) -> None:
     )
 
 
-def run(on_record: Callable[[KeystrokeRecord], None] = print_record) -> None:
-    """Listen to the keyboard until Esc is released.
+def run(
+    on_record: Callable[[KeystrokeRecord], None] = print_record,
+    stop_on_esc: bool = True,
+) -> None:
+    """Listen to the keyboard until Esc is released or Ctrl+C is pressed.
 
     Args:
         on_record: function called with each KeystrokeRecord produced.
+        stop_on_esc: stop when Esc is released (development use).
+
+    Raises:
+        KeyboardInterrupt: when Ctrl+C is pressed in the terminal. The hook is
+            removed before it propagates.
     """
     collector = KeystrokeCollector()
 
@@ -80,19 +95,22 @@ def run(on_record: Callable[[KeystrokeRecord], None] = print_record) -> None:
                 on_record(record)
 
         # Development only: releasing Esc stops the listener.
-        if key == keyboard.Key.esc:
+        if stop_on_esc and key == keyboard.Key.esc:
             return False
         return None
 
+    # Leaving the with block (normally, or because of Ctrl+C) removes the hook.
     with keyboard.Listener(on_press=on_press, on_release=on_release) as listener:
-        listener.join()
+        while listener.is_alive():
+            listener.join(0.5)  # short waits let Ctrl+C through on Windows
 
 
 def run_and_store(path: Path = DB_PATH, echo: bool = True) -> int:
-    """Listen until Esc is released, storing every record encrypted.
+    """Listen until Ctrl+C is pressed, storing every record encrypted.
 
-    The key is loaded here, before listening starts, so a key problem shows
-    up immediately. The writer is stopped in a finally block, so the last,
+    Esc is ignored, since it is pressed constantly in normal work. The key is
+    loaded here, before listening starts, so a key problem shows up
+    immediately. The writer is stopped in a finally block, so the last,
     partial batch is saved even if the listener stops with an error.
 
     Args:
@@ -113,14 +131,18 @@ def run_and_store(path: Path = DB_PATH, echo: bool = True) -> int:
         writer.submit(record)
 
     try:
-        run(on_record=on_record)
+        run(on_record=on_record, stop_on_esc=False)
+    except KeyboardInterrupt:
+        pass  # Ctrl+C is the normal way to stop a storing run
     finally:
         writer.stop()
     return count
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Live keyboard listener (Esc stops it).")
+    parser = argparse.ArgumentParser(
+        description="Live keyboard listener. Print-only: Esc stops it. --store: Ctrl+C stops it."
+    )
     parser.add_argument(
         "--store",
         nargs="?",
@@ -128,9 +150,13 @@ if __name__ == "__main__":
         metavar="PATH",
         help=f"also store records, encrypted (default path: {DB_PATH})",
     )
+    parser.add_argument(
+        "--quiet", action="store_true", help="with --store: do not print each record"
+    )
     args = parser.parse_args()
     if args.store:
-        stored = run_and_store(Path(args.store))
+        print(f"Storing records in {args.store}. Press Ctrl+C in this window to stop.")
+        stored = run_and_store(Path(args.store), echo=not args.quiet)
         print(f"Stored {stored} records in {args.store}.")
     else:
         run()
