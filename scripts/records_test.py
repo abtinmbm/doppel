@@ -24,7 +24,8 @@ assert record == KeystrokeRecord((True, 1), 78.0, 35.0, -43.0)
 
 # A frozen record cannot be changed after it is created.
 try:
-    record.dd_ms = 999.0  # pyright: ignore[reportAttributeAccessIssue]    raise AssertionError("record should be read-only")
+    record.dd_ms = 999.0  # pyright: ignore[reportAttributeAccessIssue]
+    raise AssertionError("record should be read-only")
 except FrozenInstanceError:
     pass
 
