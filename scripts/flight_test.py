@@ -29,6 +29,7 @@ How it works:
 """
 
 import time
+from typing import Any
 
 from pynput import keyboard
 
@@ -45,7 +46,7 @@ pending = {}
 #   last_down: time of the most recent real key press
 #   last_up:   time the most recent key was released (None while it is down)
 #   prev_key:  the most recent real key press
-state = {"last_down": None, "last_up": None, "prev_key": None}
+state: dict[str, Any] = {"last_down": None, "last_up": None, "prev_key": None}
 
 
 def on_press(key):

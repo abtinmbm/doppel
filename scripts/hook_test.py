@@ -21,7 +21,7 @@ from pynput import keyboard
 # Shared between both callbacks.
 # "last" is the time of the previous key event in nanoseconds,
 # or None before the first event.
-state = {"last": None}
+state: dict[str, int | None] = {"last": None}
 
 
 def on_press(key):
