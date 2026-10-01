@@ -13,6 +13,13 @@ How it works:
        the release time minus the stored press time. Matching by key keeps the
        result correct when keys overlap (down, down, up, up).
     4. Key identities exist in memory only while the key is down.
+
+Limitation (early experiment, kept for reference):
+    Keys are matched by pynput key objects, which compare by character. A
+    key pressed while Shift is down ("A") and released after Shift ("a") does
+    not match, so it stays in `held` and its later presses are ignored as
+    auto-repeats. doppel.collector avoids this by matching on virtual key
+    codes (doppel.keymap.key_id).
 """
 
 import time

@@ -26,6 +26,14 @@ How it works:
        release cannot be attached to the wrong pair.
     6. Key identities exist in memory only while the key is down, except for
        the most recent key, which is kept until the next press.
+
+Limitation (early experiment, kept for reference):
+    Keys are matched by pynput key objects, which compare by character. A
+    key pressed while Shift is down ("A") and released after Shift ("a") does
+    not match, so it stays in `held` (later presses are ignored as
+    auto-repeats) and any UD waiting in `pending` is never printed.
+    doppel.collector avoids this by matching on virtual key codes
+    (doppel.keymap.key_id).
 """
 
 import time
