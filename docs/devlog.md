@@ -1,7 +1,73 @@
 # Doppel.exe Devlog
 
-One entry per work session: what I built, what broke, what I learned, and what's next.
+One entry per work session: what I built, what broke, what I learned, and what's still open.
 Newest entry at the top. Only put numbers here that I actually measured.
+
+---
+
+## 2026-09-30: Keyboard labels, collector, live listener and encrypted storage
+
+### Built
+- `src/doppel/keymap.py`: each letter gets an (x, y) position on a QWERTY keyboard. `relation(prev_key, key)` returns a coarse label: (same half of the keyboard?, distance bucket 0-3).
+- `src/doppel/records.py`: `KeystrokeRecord`, a read-only dataclass (label, hold_ms, dd_ms, ud_ms).
+- `src/doppel/collector.py`: `KeystrokeCollector` turns key events into one record per pair of consecutive presses. It handles auto-repeat, overlapping keys (`pending`), and skips pairs more than 2 s apart.
+- `src/doppel/listener.py`: pynput listener that feeds the collector and passes records to a callback (`on_record`).
+- `src/doppel/keystore.py`: 256-bit AES-GCM key, protected with Windows DPAPI and stored as a blob in the git-ignored `data/` folder.
+- `src/doppel/storage.py`: `RecordStore` buffers 200 records, shuffles them, encrypts the batch with AES-GCM and writes one SQLite row (day, nonce, data).
+- Test scripts with hand-worked expected values: `relation_test.py`, `records_test.py`, `collector_test.py`, `keystore_test.py`, `storage_test.py`. All pass.
+- Turned on Pylance type checking (basic) and added type hints where it flagged problems.
+
+### Roadblock 1: Finger-based labels didn't match how people actually type
+
+**Problem:** The first plan labelled digraphs by finger (same finger / same hand / alternating hands), using a textbook touch-typing table. I use my ring finger for `q a z` and `p`, so the table was wrong for me, and it would be wrong for anyone who doesn't touch type.
+
+**Process:**
+- Switched to labels based on keyboard geometry, which make no assumption about the typist: whether the two keys are on the same half, and how far apart they are (straight-line distance, in key widths, with row stagger).
+- Distance is a hypothesis about what affects timing (Fitts's law: longer reaches take longer), not a guarantee. Plan: compare no label, finger labels and position labels on the Aalto free-text dataset and keep whichever earns its place.
+
+**Result:** `relation()` passed 7 hand-checked cases, including uppercase letters, a double letter ("ll" → same key) and a non-letter key (→ None).
+
+### Roadblock 2: A collector bug that produced plausible but wrong numbers
+
+**Problem:** In the overlap case I stored the pending pair under the key going down (`key`) instead of the key we were waiting for (`prev_key`). Nothing crashed and every number looked reasonable, but every overlapped record attached the wrong key's release.
+
+**Process:** Made the collector take timestamps as arguments so it can be driven by scripted events, then wrote tests replaying sequences whose results I worked out by hand (no overlap, a three-key overlap, auto-repeat, a long pause, a double letter).
+
+**Result:** The test showed the wrong values immediately. After the fix, all 5 collector checks pass. The three-key overlap produces h→e (hold 79, DD 9, UD -70) and t→h (hold 122, DD 35, UD -87), as calculated by hand.
+
+### Roadblock 3: Calling a method that didn't exist
+
+**Problem:** The listener crashed with `AttributeError: 'KeystrokeCollector' object has no attribute 'on_press'`. I had mixed up the listener's callback names (`on_press`, `on_release`) with the collector's methods (`key_down`, `key_up`).
+
+**Process:** Learned to read a traceback: the last line says what went wrong, and the last frame in my own code says where. Turned on Pylance type checking, which underlines this kind of mistake before the code runs.
+
+**Result:** The live listener works. In one test, fast "the" gave t→h with DD 42.3, hold 122.7 and UD -80.4 (42.3 - 122.7 = -80.4). The double l in "hello" gave label (True, 0), and the space gave label None.
+
+### Roadblock 4: Two privacy leaks found during design
+
+**Problem:**
+1. Records stored in typing order leak word lengths: the None labels mostly mark spaces, so the counts of letter records between them would read as word lengths (for example "3, 5, 2, 4").
+2. Fernet tokens contain their creation time in plain form, to the second. One token per batch would leave a timeline of when I typed.
+
+**Process:**
+- Each batch of 200 records is shuffled with the OS's cryptographic randomness (`secrets.SystemRandom`) before encryption, so order is lost.
+- Switched from Fernet to AES-GCM, which has no timestamp. Each batch gets a fresh random 12-byte nonce.
+- The date (day only) is the only unencrypted value. It's passed to AES-GCM as associated data, so changing it is detected.
+
+**Result:** `storage_test.py` confirms the round trip returns the same records, the file contains no readable timings, a wrong key fails, and changing a row's date fails with `InvalidTag`. `keystore_test.py` confirms a single changed ciphertext byte is detected.
+
+### Design decisions
+- **Key storage:** DPAPI through `pywin32`, so the key never sits in plain form on disk and is tied to my Windows login. It protects against copied files or a stolen drive. It does not protect against anything running as me while I'm logged in. Risk: if an admin resets my password, the key can become unrecoverable.
+- **One encrypted batch per row** instead of per-record rows (row count reveals little) or SQLCipher (fragile native dependency on Windows for little extra benefit).
+- **Batch size 200:** more mixing per batch, at most one batch lost on a crash. The buffer is also saved on exit.
+- **Retention:** store dates now and decide the deletion rule once I know how much data training needs.
+- **JSON** inside the encrypted batch, since it's readable once decrypted and size doesn't matter here.
+- **Threat model sketch:** a roommate at my unlocked laptop is stopped by detection and lock (time-to-lock is the key number). A thief with my files is stopped by encryption. Malware running as me is out of scope. Known gaps: someone can kill the app, or not type at all.
+
+### Open items
+- Background writer thread for storage, so encryption and disk writes never run inside the keyboard callbacks. Measure how long one flush takes.
+- Connect storage to the live listener.
+- Scorer interface and the privacy/threat-model doc.
 
 ---
 
@@ -56,8 +122,7 @@ Newest entry at the top. Only put numbers here that I actually measured.
 - Finger relation is a privacy choice, not the research default (most papers use the actual key pairs). It will likely cost some accuracy, and I plan to measure how much.
 - Store record order or a coarse time bucket, not exact timestamps, so rows cannot be lined up with what I was doing.
 
-### Next
+### Open items
 - `src/doppel/keymap.py`: QWERTY finger map plus `relation(prev_key, key)`.
 - Then the encrypted SQLite schema, the scorer interface sketch, and the 1-page privacy/threat-model doc.
-- Midterms Oct 21-27, reading week Oct 9-18: finish the collector before Oct 9, pause Doppel during midterms, resume the CMU model after Oct 27.
 - Later: compare finger-relation labels against real key pairs on the CMU data to measure what privacy costs in accuracy.
