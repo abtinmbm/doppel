@@ -170,7 +170,7 @@ Each module starts with a "How it works" section explaining its algorithm step b
 - Thresholds are not yet tuned on owner data; the dry run shows the mechanism, not final accuracy.
 - Keyboard geometry assumes a QWERTY layout.
 - A typing signal cannot see someone who only reads or scrolls.
-- **Known issue (to fix before real use):** in the live app, keystrokes typed by someone else *before* the lock are currently stored with the owner's data, which would both keep their data and slowly contaminate (or deliberately poison) the owner's profile. Planned fix: only add records to the profile from windows that confidently matched the owner.
+- **Profile poisoning is limited, not solved.** The live app quarantines new typing and stores it only if every window that judged it matched the owner; on 198 Aalto owners this kept 55.2% of owners' typing and let 25.4% of impostor typing through (keep threshold 0.05). Typing the detector cannot tell apart from the owner's still gets through.
 
 ## Roadmap
 

@@ -17,15 +17,23 @@ How it works:
          a. A gap longer than the quiet period since the previous record
             empties the scorer's window, so the first window after a break
             holds only new typing.
-         b. The record goes to the storage writer.
+         b. The record enters quarantine (quarantine.py) instead of being
+            stored straight away.
          c. The scorer returns a trust value every `stride` records once its
-            window is full; the trust engine fuses it and decides.
-         d. On a lock decision: lock the screen (or print WOULD LOCK in a
-            dry run), then reset the engine and the scorer's window; in lock
-            mode the collector is also reset (on the hook's thread), since
-            releases are not seen while the screen is locked.
+            window is full; quarantine notes whether it was low, and the
+            trust engine fuses it and decides.
+         d. Records leave quarantine once they have left the scoring window:
+            stored if every window that judged them was fine, dropped
+            otherwise. So typing that looked like someone else is never
+            stored and never trains the owner's profile.
+         e. On a lock decision: drop everything in quarantine, lock the
+            screen (or print WOULD LOCK in a dry run), then reset the engine
+            and the scorer's window; in lock mode the collector is also reset
+            (on the hook's thread), since releases are not seen while the
+            screen is locked.
     4. Ctrl+C in the terminal stops the app. The worker finishes the queued
-       records and the writer saves the last batch.
+       records, quarantine releases its judged, clean records, and the
+       writer saves the last batch.
 
 Usage:
     uv run python -m doppel.app                       dry run, profile from data/doppel.db
@@ -44,6 +52,7 @@ from pathlib import Path
 
 from doppel.keystore import get_or_create_key
 from doppel.listener import run
+from doppel.quarantine import Quarantine
 from doppel.records import KeystrokeRecord
 from doppel.scorer import TypingScorer, build_typing_scorer
 from doppel.storage import DB_PATH, RecordStore
@@ -76,29 +85,36 @@ def load_records(key: bytes, paths: list[Path]) -> list[KeystrokeRecord]:
 
 
 class LivePipeline:
-    """Runs each record through storage, the scorer and the trust engine."""
+    """Runs each record through quarantine, the scorer and the trust engine."""
 
     def __init__(
         self,
         scorer: TypingScorer,
         engine: TrustEngine,
-        store: Callable[[KeystrokeRecord], None],
+        quarantine: Quarantine,
         lock: Callable[[], None],
         report: Callable[[float, float | None, int, bool], None] | None = None,
+        keep_threshold: float | None = None,
     ):
         """Connect the parts.
 
         Args:
             scorer: the owner's typing scorer.
             engine: the trust engine that decides when to lock.
-            store: called with every record (the storage writer's submit).
+            quarantine: holds records until judged; releases clean ones to
+                storage.
             lock: called on a lock decision (locks, or prints in a dry run).
             report: called with (trust, fused trust, low streak, locked) for
                 every trust value, e.g. to print it.
+            keep_threshold: a trust value below this flags the records it
+                covers, so quarantine drops them. Defaults to the lock
+                threshold; it can be set higher, to store only typing that
+                matched the owner more clearly than needed to avoid a lock.
         """
         self.scorer = scorer
+        self.keep_threshold = engine.threshold if keep_threshold is None else keep_threshold
         self.engine = engine
-        self.store = store
+        self.quarantine = quarantine
         self.lock = lock
         self.report = report
         self.last_t: float | None = None
@@ -110,15 +126,17 @@ class LivePipeline:
             self.scorer.reset()
         self.last_t = t
 
-        self.store(record)
+        self.quarantine.add(record)
         trust = self.scorer.observe(record)
         if trust is None:
             return False
 
+        self.quarantine.judge(low=trust < self.keep_threshold)
         locked = self.engine.update(self.scorer.name, trust, t)
         if self.report is not None:
             self.report(trust, self.engine.fused(), self.engine.low_streak, locked)
         if locked:
+            self.quarantine.drop_all()  # the keystrokes that caused the lock
             self.lock()
             self.engine.reset()
             self.scorer.reset()
@@ -163,7 +181,8 @@ def run_app(
         if echo:
             print(f"trust {trust:.3f}  fused {fused:.3f}  low streak {streak}")
 
-    pipeline = LivePipeline(scorer, engine, writer.submit, do_lock, report)
+    quarantine = Quarantine(scorer.window, writer.submit)
+    pipeline = LivePipeline(scorer, engine, quarantine, do_lock, report)
     inbox: queue.Queue[tuple[KeystrokeRecord, float] | None] = queue.Queue()
     errors: list[BaseException] = []
 
@@ -187,7 +206,9 @@ def run_app(
     finally:
         inbox.put(None)
         thread.join()
+        quarantine.close()
         writer.stop()
+    print(f"Stored {quarantine.kept} records; dropped {quarantine.dropped} from low-trust windows.")
     if errors:
         raise errors[0]
 
