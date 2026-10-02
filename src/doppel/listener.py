@@ -37,6 +37,7 @@ Usage:
 """
 
 import argparse
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -64,12 +65,16 @@ def print_record(record: KeystrokeRecord) -> None:
 def run(
     on_record: Callable[[KeystrokeRecord], None] = print_record,
     stop_on_esc: bool = True,
+    reset_event: threading.Event | None = None,
 ) -> None:
     """Listen to the keyboard until Esc is released or Ctrl+C is pressed.
 
     Args:
         on_record: function called with each KeystrokeRecord produced.
         stop_on_esc: stop when Esc is released (development use).
+        reset_event: when another thread sets it (e.g. after locking the
+            screen), the collector is reset at the next key event. The reset
+            happens on the hook's own thread, which owns the collector.
 
     Raises:
         KeyboardInterrupt: when Ctrl+C is pressed in the terminal. The hook is
@@ -77,8 +82,15 @@ def run(
     """
     collector = KeystrokeCollector()
 
+    def reset_if_asked() -> None:
+        """Reset the collector if another thread asked for it."""
+        if reset_event is not None and reset_event.is_set():
+            collector.reset()
+            reset_event.clear()
+
     def on_press(key: keyboard.Key | keyboard.KeyCode | None) -> None:
         now = time.perf_counter_ns()
+        reset_if_asked()
         vk = key_id(key)
         if vk is None:
             return
@@ -88,6 +100,7 @@ def run(
 
     def on_release(key: keyboard.Key | keyboard.KeyCode | None) -> bool | None:
         now = time.perf_counter_ns()
+        reset_if_asked()
         vk = key_id(key)
         if vk is not None:
             record = collector.key_up(vk, now)

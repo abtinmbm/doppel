@@ -31,23 +31,18 @@ Method:
 Run from the project folder: uv run python scripts/aalto_experiment.py [participants]
 """
 
-import csv
 import sys
-from collections import Counter
 import time
 import zipfile
-from pathlib import Path
+from collections import Counter
 
 import numpy as np
-import pandas as pd
 
+from doppel.aalto import ZIP_PATH, load_sample
 from doppel.keymap import relation, vk_letter
 from doppel.metrics import eer
-from doppel.replay import replay
 from doppel.window_scorer import WindowScorer, window_scores
 
-ZIP_PATH = Path("data") / "aalto" / "Keystrokes.zip"
-FILES = "Keystrokes/files/"
 N_PARTICIPANTS = int(sys.argv[1]) if len(sys.argv) > 1 else 1_000
 N_IMPOSTORS = 50
 TRAIN_SENTENCES = 10
@@ -78,75 +73,26 @@ SCHEMES = {
 }
 
 
-def read_tsv(z: zipfile.ZipFile, name: str, **kwargs) -> pd.DataFrame:
-    """Read a tab-separated file from the zip (sentences may contain quotes)."""
-    with z.open(name) as f:
-        return pd.read_csv(
-            f,
-            sep="\t",
-            quoting=csv.QUOTE_NONE,
-            encoding_errors="replace",
-            on_bad_lines="skip",
-            **kwargs,
-        )
-
-
-def load_sentences(z: zipfile.ZipFile, pid: int) -> list[list[tuple[float, float, int]]]:
-    """Return a participant's sentences in typing order, as keystroke lists."""
-    rows = read_tsv(
-        z,
-        f"{FILES}{pid}_keystrokes.txt",
-        usecols=["TEST_SECTION_ID", "PRESS_TIME", "RELEASE_TIME", "KEYCODE"],
-    )
-    rows = rows.apply(pd.to_numeric, errors="coerce").dropna()
-    sentences = []
-    for _, s in rows.groupby("TEST_SECTION_ID"):
-        keystrokes = list(
-            zip(s["PRESS_TIME"], s["RELEASE_TIME"], s["KEYCODE"].astype(int))
-        )
-        sentences.append((s["PRESS_TIME"].min(), keystrokes))
-    sentences.sort(key=lambda item: item[0])  # by when the sentence started
-    return [keystrokes for _, keystrokes in sentences]
-
-
-def to_records(sentences):
-    """Replay each sentence separately (pairs never span two sentences)."""
-    records = []
-    for keystrokes in sentences:
-        records += replay(keystrokes, label_fn=lambda a, b: (a, b))
-    return records
-
-
 start = time.perf_counter()
 rng = np.random.default_rng(SEED)
 z = zipfile.ZipFile(ZIP_PATH)
 
-meta = read_tsv(z, f"{FILES}metadata_participants.txt")
-eligible = meta[
-    (meta["LAYOUT"] == "qwerty") & meta["KEYBOARD_TYPE"].isin(["full", "laptop"])
-]["PARTICIPANT_ID"].to_numpy()
-
 # Load a random sample, keeping participants with all 15 sentences and enough
-# test records for the largest window.
-data = {}
-for pid in rng.permutation(eligible):
-    if len(data) == N_PARTICIPANTS:
-        break
-    try:
-        sentences = load_sentences(z, int(pid))
-    except (KeyError, ValueError):
-        continue  # missing or unreadable file
-    if len(sentences) < TRAIN_SENTENCES + TEST_SENTENCES:
-        continue
-    train = to_records(sentences[:TRAIN_SENTENCES])
-    test = to_records(sentences[TRAIN_SENTENCES : TRAIN_SENTENCES + TEST_SENTENCES])
-    if len(test) < max(WINDOW_SIZES):
-        continue
-    data[pid] = (train, test)
+# test records for the largest window. Labels keep the key pair so every
+# scheme can be computed from the same records.
+data, n_eligible = load_sample(
+    z,
+    rng,
+    N_PARTICIPANTS,
+    label_fn=lambda a, b: (a, b),
+    train_sentences=TRAIN_SENTENCES,
+    test_sentences=TEST_SENTENCES,
+    min_test_records=max(WINDOW_SIZES),
+)
 
 pids = list(data)
 print(
-    f"{len(eligible):_} eligible participants; using {len(pids)}. "
+    f"{n_eligible:_} eligible participants; using {len(pids)}. "
     f"Records per person: train {np.mean([len(t) for t, _ in data.values()]):.0f}, "
     f"test {np.mean([len(t) for _, t in data.values()]):.0f}. "
     f"Loaded in {time.perf_counter() - start:.0f} s."
