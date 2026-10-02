@@ -1,5 +1,7 @@
 # Doppel.exe
 
+[![tests](https://github.com/abtinmbm/doppel/actions/workflows/tests.yml/badge.svg)](https://github.com/abtinmbm/doppel/actions/workflows/tests.yml)
+
 **Continuous authentication for Windows: it learns how you type and locks the screen when someone else is at the keyboard.**
 
 > **Status:** Milestone 1 (typing) in progress. The full pipeline runs live in a dry-run mode; lock thresholds are being tuned on the owner's own collected typing. No accuracy claims are made for the live system yet. Every number below was measured and is labelled with what it measures.
@@ -8,20 +10,20 @@
 
 ## Why
 
-I always leave my PC on at home. My brother has worked out that an unlocked PC is basically a free PC.
+I always leave my PC on at home. Yes, I know about <kbd>Win</kbd> + <kbd>L</kbd>. I even use it, sometimes. The rest of the time, my brother notices.
 
-He doesn't hack anything. He doesn't guess my password. He just waits until I walk away, sits down, and makes himself comfortable in the fully logged-in session I left behind. I come back to a browser history I don't recognise, recommendations I did not earn, and the vague feeling that my computer has been living a second life.
+He doesn't hack anything or guess my password. He just waits until I walk away and helps himself to the logged-in session I left behind. Doppel is my petty, over-engineered way of booting him out: it learns *how I type*, keeps checking the whole time, and when the person at the keyboard stops typing like me it calls Windows' own `LockWorkStation`. (Sorry, bro.)
 
-My password was never the problem. A login screen checks who you are **once**, at the start; after that, Windows assumes whoever is at the keyboard is still you. My brother is living proof that it isn't.
+Windows' built-in protections don't cover this:
 
-Windows has two partial answers, and he gets past both:
-
-| Existing protection | How my brother gets past it |
+| Existing protection | Why it misses |
 |---|---|
 | Lock after N minutes idle | He sits down within those N minutes |
-| Dynamic Lock (locks when your paired phone leaves) | My phone is still on the desk; I only went to the kitchen |
+| Dynamic Lock (locks when your paired phone leaves) | My phone is still on the desk |
 
-So I built Doppel. It learns *how I type* and keeps checking, the whole time. When the person at the keyboard stops typing like me, it calls Windows' own `LockWorkStation` and he is back at the login screen. (Sorry, bro.)
+### The bigger problem
+
+My brother is just the catalyst. A login screen checks who you are **once**; everything after that assumes nobody else sits down. The same gap exists wherever a session stays open: shared offices, hospital workstations, labs, a laptop left open in a library. **Continuous authentication** closes it by checking identity the whole time, from behaviour, without asking the user to do anything. Doppel is a small, local, privacy-preserving version of that idea, built to be measured and attacked honestly.
 
 ## How it works
 
@@ -141,11 +143,13 @@ uv run python -m doppel.app --lock
 
 ## Testing
 
-Every module has an assert-based test whose expected values were worked out by hand before running the code (`scripts/*_test.py`, 15 scripts). Key tests were also checked by breaking the code on purpose and confirming the test fails. Run them all from the repository root:
+Every module has an assert-based check whose expected values were worked out by hand before running the code (`scripts/*_test.py`, 15 scripts). Key checks were also verified by breaking the code on purpose and confirming the check fails. Each script runs on its own (`uv run python scripts/collector_test.py`), and pytest runs them all, locally and on every push via GitHub Actions on Windows:
 
 ```powershell
-Get-ChildItem scripts\*_test.py | ForEach-Object { uv run python $_.FullName }
+uv run pytest
 ```
+
+Scripts that hook the real keyboard are named `scripts/*_demo.py` and are never collected.
 
 Beyond unit tests: reproduction of a published benchmark (above) and live runs where known text is typed and every record is matched to the keys pressed.
 
@@ -166,6 +170,7 @@ Each module starts with a "How it works" section explaining its algorithm step b
 - Thresholds are not yet tuned on owner data; the dry run shows the mechanism, not final accuracy.
 - Keyboard geometry assumes a QWERTY layout.
 - A typing signal cannot see someone who only reads or scrolls.
+- **Known issue (to fix before real use):** in the live app, keystrokes typed by someone else *before* the lock are currently stored with the owner's data, which would both keep their data and slowly contaminate (or deliberately poison) the owner's profile. Planned fix: only add records to the profile from windows that confidently matched the owner.
 
 ## Roadmap
 
@@ -178,3 +183,7 @@ Each module starts with a "How it works" section explaining its algorithm step b
 
 - K. Killourhy and R. Maxion. *Comparing Anomaly-Detection Algorithms for Keystroke Dynamics.* DSN 2009. Dataset: [CMU Keystroke Dynamics Benchmark](https://www.cs.cmu.edu/~keystroke/).
 - V. Dhakal, A. M. Feit, P. O. Kristensson and A. Oulasvirta. *Observations on Typing from 136 Million Keystrokes.* CHI 2018. [doi:10.1145/3173574.3174220](https://doi.org/10.1145/3173574.3174220). Dataset: [Aalto 136M Keystrokes](https://userinterfaces.aalto.fi/136Mkeystrokes/) (non-commercial use with attribution).
+
+## License
+
+[MIT](LICENSE). The datasets are not included and keep their own terms (Aalto: non-commercial use with attribution).
