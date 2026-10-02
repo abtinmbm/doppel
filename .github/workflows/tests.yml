@@ -1,0 +1,18 @@
+# Runs the test suite on every push and pull request.
+# Windows, because Doppel uses Windows-only APIs (DPAPI for the key).
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install dependencies (exact versions from uv.lock)
+        run: uv sync --locked
+      - name: Run tests
+        run: uv run pytest -v
