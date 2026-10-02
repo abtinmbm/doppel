@@ -17,7 +17,13 @@ from pathlib import Path
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from doppel.records import KeystrokeRecord
-from doppel.storage import BATCH_SIZE, NONCE_BYTES, RecordStore, _record_to_row, _shuffle_rng
+from doppel.storage import (
+    BATCH_SIZE,
+    NONCE_BYTES,
+    RecordStore,
+    _record_to_row,
+    _shuffle_rng,
+)
 
 RUNS = 50
 
@@ -27,7 +33,8 @@ key = AESGCM.generate_key(bit_length=256)
 
 # A realistic batch: both label shapes, typical timing values.
 batch = [
-    KeystrokeRecord((False, 2), 95.3 + i % 40, 180.7 + i % 90, 85.4) if i % 3
+    KeystrokeRecord((False, 2), 95.3 + i % 40, 180.7 + i % 90, 85.4)
+    if i % 3
     else KeystrokeRecord(("right", "space"), 88.1, 140.2 + i % 60, 52.1)
     for i in range(BATCH_SIZE)
 ]
@@ -53,5 +60,9 @@ for _ in range(RUNS):
     cpu_ms.append((time.perf_counter_ns() - start) / 1_000_000)
 
 path.unlink()
-print(f"Whole flush ({BATCH_SIZE} records, {RUNS} runs): median {statistics.median(flush_ms):.2f} ms, max {max(flush_ms):.2f} ms")
-print(f"Shuffle + JSON + encrypt only:             median {statistics.median(cpu_ms):.3f} ms, max {max(cpu_ms):.3f} ms")
+print(
+    f"Whole flush ({BATCH_SIZE} records, {RUNS} runs): median {statistics.median(flush_ms):.2f} ms, max {max(flush_ms):.2f} ms"
+)
+print(
+    f"Shuffle + JSON + encrypt only:             median {statistics.median(cpu_ms):.3f} ms, max {max(cpu_ms):.3f} ms"
+)
