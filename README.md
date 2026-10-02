@@ -42,7 +42,7 @@ flowchart LR
 1. **Collect.** A keyboard hook timestamps every key press and release. For each pair of consecutive keys the collector records three times: **hold** (how long the first key is down), **DD** (press to next press) and **UD** (release to next press; negative when keys overlap). It handles auto-repeat, overlapping keys, Shift/Ctrl (keys are identified by virtual key code) and releases lost when the screen locks.
 2. **Label without content.** Each pair gets a coarse label instead of its letters: keyboard geometry for two letters (`(same_half, distance_bucket)`), or the kind of each key otherwise (`("right", "space")`). Which label to use was decided by experiment (see Results).
 3. **Store encrypted.** Records are buffered in batches of 200, shuffled, and encrypted with AES-GCM on a background thread; the key is protected by Windows DPAPI.
-4. **Score.** The owner's profile is the median and spread of each timing per label group. A window of 100 records is scored by summing each group's signed, scaled deviations: random noise cancels, a consistent shift (a different person) adds up.
+4. **Score.** The owner's profile is the median and spread of each timing per label group, measured on a log scale (differences are proportional). A window of 100 records is scored by summing each group's signed, scaled deviations, each capped so a single long pause cannot dominate: random noise cancels, a consistent shift (a different person) adds up.
 5. **Calibrate.** The window score becomes a trust value from 0 to 1: the share of the owner's own held-out windows that looked at least as unusual. Every signal is calibrated this way, so future signals (mouse) fuse on the same scale.
 6. **Decide.** The trust engine locks after several low values in a row (grace). After a quiet period with no evidence, old evidence expires and the first low value locks: someone sitting down after you left must look like you straight away.
 
@@ -96,13 +96,26 @@ On 1,000 participants of the Aalto 136M Keystrokes free-text dataset (time-order
 
 Paired over the same owners, geometry + key kinds beat geometry by 0.068 EER (95% interval 0.062–0.075). Storing real letter pairs splits Space/Shift pairs into groups too small to learn from; key kinds keep them in a few well-filled groups.
 
-The window score itself was also chosen by measurement: summing signed deviations per group instead of averaging absolute deviations improved EER from 0.207 to 0.176 (digraph labels, 100 participants).
+The window score itself was also chosen by measurement: summing signed deviations per group instead of averaging absolute deviations improved EER from 0.207 to 0.176 (digraph labels, 100 participants). The label choice was re-checked with the improved scorer below and still holds: geometry + key kinds 0.025, real letter pairs 0.046, geometry only 0.051.
 
-### 3. The lock decision, simulated
+### 3. Fixing outliers cut the error about 7×
 
-`scripts/lock_simulation.py` builds a real scorer and trust engine for 498 Aalto owners (10 impostors each). With windows of 100 records, a threshold of 0.05 and grace 3: **2.38 false locks per 1,000 owner keystrokes**, and **78%** of impostors locked out at their first window after a quiet period. That false-lock rate is too high for daily use. Aalto profiles are thin (~478 training records per person), so thresholds are tuned on the owner's own, much larger data against a target of **at most one false lock per day**.
+`scripts/model_experiment.py` compared 12 scoring variants on 500 owners (50 impostors each). Thinking pauses inside DD were swamping whole windows; measuring timings on a log scale and capping each deviation at ±3 fixed it. The winner was chosen on a development sample and then confirmed once on 500 different owners:
 
-### 4. Engineering measurements
+| Scorer | Development sample | Fresh confirmation sample |
+|---|---|---|
+| Previous (raw timings, no cap) | 0.173 | 0.164 |
+| **Log scale + capped deviations** | **0.026** | **0.023** |
+
+Mean EER for windows of 100 records. A likelihood ratio against a separate background population was also tried (0.043) and not adopted.
+
+### 4. The lock decision, simulated
+
+`scripts/lock_simulation.py` builds a real scorer and trust engine for 498 Aalto owners (10 impostors each). With windows of 100 records, a threshold of 0.05 and grace 3, the improved scorer locks out **90%** of impostors at their first window after a quiet period (78% before), at **1.99 false locks per 1,000 owner keystrokes** (2.38 before).
+
+Trust is a calibrated p-value, so the threshold sets the false-lock rate and a stronger scorer is what allows a lower threshold. Aalto's small calibration sets cannot reach thresholds low enough for daily use; they are tuned on the owner's own, much larger data against a target of **at most one false lock per day**.
+
+### 5. Engineering measurements
 
 - Encrypting and writing one 200-record batch: median 2.29–2.45 ms (`scripts/flush_timing.py`), done on a background thread so the keyboard hook is never delayed.
 - Computing one trust value: median 0.25 ms, worst 1.41 ms (96 values), also off the hook thread.
@@ -170,7 +183,7 @@ Each module starts with a "How it works" section explaining its algorithm step b
 - Thresholds are not yet tuned on owner data; the dry run shows the mechanism, not final accuracy.
 - Keyboard geometry assumes a QWERTY layout.
 - A typing signal cannot see someone who only reads or scrolls.
-- **Profile poisoning is limited, not solved.** The live app quarantines new typing and stores it only if every window that judged it matched the owner; on 198 Aalto owners this kept 55.2% of owners' typing and let 25.4% of impostor typing through (keep threshold 0.05). Typing the detector cannot tell apart from the owner's still gets through.
+- **Profile poisoning is limited, not solved.** The live app quarantines new typing and stores it only if every window that judged it matched the owner; on 198 Aalto owners this let 11.2% of impostor typing through at keep threshold 0.05 and 1.9% at 0.2, while keeping 53.2% and 43.2% of owners' typing. Typing the detector cannot tell apart from the owner's still gets through.
 
 ## Roadmap
 
