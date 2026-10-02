@@ -41,7 +41,7 @@ from typing import Protocol
 import numpy as np
 
 from doppel.records import KeystrokeRecord
-from doppel.window_scorer import WindowScorer, window_scores
+from doppel.window_scorer import CLIP, WindowScorer, window_scores
 
 # Defaults for the typing scorer.
 WINDOW = 100
@@ -136,11 +136,15 @@ def build_typing_scorer(
     stride: int = STRIDE,
     calibration_share: float = CALIBRATION_SHARE,
     min_count: int = 5,
+    kind: str = "log2",
+    clip: float | None = CLIP,
 ) -> TypingScorer:
     """Build a typing scorer from the owner's records, in typing order.
 
     The first (1 - calibration_share) of the records train the profile; the
     rest are scored in windows (one at every position) to calibrate it.
+    kind and clip choose the window scorer's features and cap (see
+    window_scorer.py); the defaults are the measured best.
 
     Raises:
         ValueError: if the calibration part is shorter than one window.
@@ -151,7 +155,7 @@ def build_typing_scorer(
     # clear message instead of an error from deep inside the fitting.
     if len(held_out) < window:
         raise ValueError(f"need at least {window} calibration records, got {len(held_out)}")
-    profile = WindowScorer(label_groups, min_count)
+    profile = WindowScorer(label_groups, min_count, kind, clip)
     profile.fit(train)
     z, groups = profile.deviations(held_out)
     calibration = window_scores(z, groups, window, 1)  # every window position

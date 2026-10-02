@@ -1,5 +1,8 @@
 """Checks for doppel.scorer on values worked out by hand.
 
+The hand-worked numbers use the raw scale without a cap (kind="raw3",
+clip=None), where the arithmetic is easy to follow.
+
 Profile used below (same five records as window_scorer_test.py), all with the
 label (True, 1): medians hold 100, DD 200, UD 90; every MAD is 10.
 """
@@ -30,7 +33,7 @@ assert calibrated_trust(0.5, cal) == 5 / 5  # less anomalous than all of them
 assert calibrated_trust(5.0, cal) == 1 / 5  # more anomalous than all of them
 
 # Rolling window of 3, a trust value every 2 records once full.
-profile = WindowScorer(label_groups, min_count=5)
+profile = WindowScorer(label_groups, min_count=5, kind="raw3", clip=None)
 profile.fit([rec(80, 200), rec(90, 180), rec(100, 220), rec(110, 190), rec(120, 210)])
 scorer = TypingScorer(profile, [0.5, 1.0, 2.0, 4.0], window=3, stride=2)
 # z rows: (120, 230) -> [2, 3, 2]; (100, 200) -> [0, 0, 1];
@@ -53,7 +56,7 @@ assert scorer.observe(rec(100, 200)) is None
 # (100, 200), (80, 170) has z rows [2, 3, 1], [0, 0, 0], [-2, -3, -1], which
 # sum to 0 -> one calibration score of 0.
 train = [rec(80, 200), rec(90, 180), rec(100, 220), rec(110, 190), rec(120, 210), rec(100, 200), rec(100, 200)]
-built = build_typing_scorer(train + [rec(120, 230), rec(100, 200), rec(80, 170)], window=3, stride=1)
+built = build_typing_scorer(train + [rec(120, 230), rec(100, 200), rec(80, 170)], window=3, stride=1, kind="raw3", clip=None)
 assert np.allclose(built.profile.median[G], [100, 200, 100])
 assert np.allclose(built.calibration, [0.0])
 
@@ -61,7 +64,7 @@ assert np.allclose(built.calibration, [0.0])
 # 11 records -> 7 train, 4 held out: z rows [2, 3, 1], [0, 0, 0],
 # [-2, -3, -1], [0, 0, 0]. Windows of 3 at positions 0 and 1 sum to 0 and to
 # [-2, -3, -1] -> scores 0 and 6/3 = 2, even with stride 10.
-built = build_typing_scorer(train + [rec(120, 230), rec(100, 200), rec(80, 170), rec(100, 200)], window=3, stride=10)
+built = build_typing_scorer(train + [rec(120, 230), rec(100, 200), rec(80, 170), rec(100, 200)], window=3, stride=10, kind="raw3", clip=None)
 assert np.allclose(built.calibration, [0.0, 2.0])
 assert built.stride == 10
 

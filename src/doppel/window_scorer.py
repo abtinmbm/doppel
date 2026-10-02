@@ -10,17 +10,26 @@ How it works:
     1. A grouping function maps each record to a list of group keys, from
        most specific to least specific. For example, with real digraphs:
        (the key pair, its geometry label, "all").
-    2. fit(): for every group key, the training records in that group give a
-       median and a median absolute deviation (MAD) for each feature (hold,
-       DD, UD). Medians are used because typing times are right-skewed:
-       a few long pauses would drag a mean and a standard deviation upwards.
-    3. A record uses the first of its group keys that had at least min_count
+    2. Features. By default ("log2") each record is described by
+       log(hold + 1) and log(DD + 1), in milliseconds. UD is left out because
+       UD = DD - hold adds nothing new. The log scale treats differences as
+       proportional: 20 ms matters more at 60 ms than at 400 ms. The older
+       "raw3" set (hold, DD, UD in ms) is kept so earlier experiments can be
+       reproduced exactly.
+    3. fit(): for every group key, the training records in that group give a
+       median and a median absolute deviation (MAD) for each feature.
+       Medians are used because typing times are right-skewed: a few long
+       pauses would drag a mean and a standard deviation upwards.
+    4. A record uses the first of its group keys that had at least min_count
        training records. Rare groups fall back to broader ones, so a digraph
        the owner seldom typed is judged by its geometry group instead.
-    4. deviations(): each record's signed, scaled deviation per feature,
+    5. deviations(): each record's signed, scaled deviation per feature,
            z = (value - median) / MAD
-       using its group's statistics, plus the group it used.
-    5. window_scores(): within a window of N records, the z values of each
+       using its group's statistics, capped at +-clip (default 3). The cap
+       stops one extreme value, such as a long thinking pause inside DD,
+       from dominating a whole window: without it, a single 1,500 ms pause
+       against a typical 150 ms outweighed dozens of ordinary keystrokes.
+    6. window_scores(): within a window of N records, the z values of each
        group are summed per feature (signed), and
            score = sum over groups and features of |sum of z| / N.
        Summing before taking the absolute value lets random noise cancel
@@ -28,8 +37,13 @@ How it works:
        shift (an impostor who is always slower on these pairs) adds up. A
        group with one record in the window contributes its plain |z|.
 
-The MAD is floored at MIN_MAD_MS (the 1 ms resolution of the timings), so a
-group with identical training values does not cause a division by zero.
+The MAD is floored (1 ms on the raw scale, 0.01 on the log scale, about 1%),
+so a group with identical training values does not cause a division by zero.
+
+Measured on Aalto (scripts/model_experiment.py, 500 owners, 50 impostors
+each, windows of 100 records): mean EER 0.173 with "raw3" and no cap, 0.026
+with "log2" and a cap of 3; confirmed on 500 different owners: 0.164 and
+0.023.
 """
 
 from collections.abc import Callable, Hashable, Sequence
@@ -41,35 +55,58 @@ from doppel.records import KeystrokeRecord
 # Default minimum number of training records for a group to be used.
 MIN_COUNT = 5
 
-# Smallest MAD allowed, in milliseconds.
-MIN_MAD_MS = 1.0
+# Default cap on each scaled deviation (None = no cap).
+CLIP = 3.0
+
+# Smallest MAD allowed for each feature set: 1 ms on the raw scale, 0.01 on
+# the log scale (about a 1% difference).
+MIN_MAD = {"raw3": 1.0, "log2": 0.01}
 
 GroupKeys = Callable[[KeystrokeRecord], Sequence[Hashable]]
 
 
-def features(records: Sequence[KeystrokeRecord]) -> np.ndarray:
-    """Return the timings as an array: one row per record, columns hold, DD, UD."""
-    return np.array([[r.hold_ms, r.dd_ms, r.ud_ms] for r in records], dtype=float)
+def features(records: Sequence[KeystrokeRecord], kind: str = "log2") -> np.ndarray:
+    """Return the features as an array, one row per record.
+
+    Args:
+        records: the records.
+        kind: "log2" = log(hold + 1), log(DD + 1); "raw3" = hold, DD, UD in ms.
+    """
+    if kind == "raw3":
+        return np.array([[r.hold_ms, r.dd_ms, r.ud_ms] for r in records], dtype=float)
+    raw = np.array([[r.hold_ms, r.dd_ms] for r in records], dtype=float)
+    # DD can be 0 when two keys go down together; +1 keeps the log finite.
+    return np.log(np.maximum(raw, 0.0) + 1.0)
 
 
 class WindowScorer:
     """Per-group robust timing profile of one person."""
 
-    def __init__(self, group_keys: GroupKeys, min_count: int = MIN_COUNT):
-        """Set how records are grouped.
+    def __init__(
+        self,
+        group_keys: GroupKeys,
+        min_count: int = MIN_COUNT,
+        kind: str = "log2",
+        clip: float | None = CLIP,
+    ):
+        """Set how records are grouped and measured.
 
         Args:
             group_keys: maps a record to its group keys, most specific first.
                 The last key should be shared by every record (e.g. "all")
                 so that every record has a group to fall back to.
             min_count: training records a group needs before it is used.
+            kind: feature set, "log2" (default) or "raw3" (see features()).
+            clip: cap on each scaled deviation, or None for no cap.
         """
         self.group_keys = group_keys
         self.min_count = min_count
+        self.kind = kind
+        self.clip = clip
 
     def fit(self, records: Sequence[KeystrokeRecord]) -> None:
         """Learn the median and MAD of every group with enough training records."""
-        values = features(records)
+        values = features(records, self.kind)
 
         # Rows of the training array that belong to each group key.
         rows: dict[Hashable, list[int]] = {}
@@ -87,7 +124,7 @@ class WindowScorer:
             median = np.median(group, axis=0)
             self.median[key] = median
             self.mad[key] = np.maximum(
-                np.median(np.abs(group - median), axis=0), MIN_MAD_MS
+                np.median(np.abs(group - median), axis=0), MIN_MAD[self.kind]
             )
 
     def deviations(
@@ -96,14 +133,15 @@ class WindowScorer:
         """Return each record's scaled deviations and the group it was judged by.
 
         Returns:
-            z: array (records x features) of (value - median) / MAD.
+            z: array (records x features) of (value - median) / MAD,
+                capped at +-clip.
             groups: the group key used for each record.
 
         Raises:
             KeyError: if a record has no group with enough training data
                 (only possible if the last group key is not shared by all).
         """
-        values = features(records)
+        values = features(records, self.kind)
         medians = np.empty_like(values)
         mads = np.empty_like(values)
         groups = []
@@ -115,7 +153,10 @@ class WindowScorer:
             medians[i] = self.median[key]
             mads[i] = self.mad[key]
             groups.append(key)
-        return (values - medians) / mads, groups
+        z = (values - medians) / mads
+        if self.clip is not None:
+            z = np.clip(z, -self.clip, self.clip)
+        return z, groups
 
 
 def window_scores(

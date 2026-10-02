@@ -28,7 +28,7 @@ Method:
     5. Reported: mean, standard deviation and median EER over owners, for
        every scheme and window size.
 
-Run from the project folder: uv run python scripts/aalto_experiment.py [participants]
+Run from the project folder: uv run python scripts/aalto_experiment.py [participants] [raw3|log2]
 """
 
 import sys
@@ -44,6 +44,9 @@ from doppel.metrics import eer
 from doppel.window_scorer import WindowScorer, window_scores
 
 N_PARTICIPANTS = int(sys.argv[1]) if len(sys.argv) > 1 else 1_000
+# Window scorer: "raw3" (the scorer the published results used, no cap) or
+# "log2" (log scale, deviations capped at 3: the current default scorer).
+SCORER = sys.argv[2] if len(sys.argv) > 2 else "raw3"
 N_IMPOSTORS = 50
 TRAIN_SENTENCES = 10
 TEST_SENTENCES = 5
@@ -141,7 +144,12 @@ for owner in pids:
     impostors = rng.choice(len(others), size=N_IMPOSTORS, replace=False)
     owner_train, owner_test = data[owner]
     for scheme, group_keys in SCHEMES.items():
-        scorer = WindowScorer(group_keys)
+        # "raw3" reproduces the published results; "log2" re-checks the
+        # label choice with the current scorer.
+        if SCORER == "raw3":
+            scorer = WindowScorer(group_keys, kind="raw3", clip=None)
+        else:
+            scorer = WindowScorer(group_keys)
         scorer.fit(owner_train)
         genuine = scorer.deviations(owner_test)
         impostor = [scorer.deviations(data[others[i]][1]) for i in impostors]
