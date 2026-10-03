@@ -17,6 +17,7 @@ Three streams are replayed through them:
                 first low value locks. Same two numbers.
 
 Every combination of window size, lock threshold and grace is reported.
+The replay helpers (trust_values, false_locks, first_lock) are in doppel.tuning.
 Keystroke counts are records (one per key press after the first).
 Run from the project folder: uv run python scripts/lock_simulation.py [owners]
 """
@@ -28,9 +29,8 @@ import zipfile
 import numpy as np
 
 from doppel.aalto import ZIP_PATH, load_sample
-from doppel.scorer import CALIBRATION_SHARE, build_typing_scorer, calibrated_trust
-from doppel.trust import TrustEngine
-from doppel.window_scorer import window_scores
+from doppel.scorer import CALIBRATION_SHARE, build_typing_scorer
+from doppel.tuning import false_locks, first_lock, trust_values
 
 N_OWNERS = int(sys.argv[1]) if len(sys.argv) > 1 else 500
 N_IMPOSTORS = 10
@@ -39,46 +39,6 @@ STRIDE = 10
 THRESHOLDS = [0.01, 0.02, 0.05, 0.10]
 GRACES = [1, 2, 3, 5]
 SEED = 0
-
-
-def trust_values(scorer, z, groups):
-    """Trust after each window of a stream: (window end index, trust) pairs.
-
-    Equivalent to feeding the stream to scorer.observe() record by record
-    (checked below), but computed in one pass.
-    """
-    scores = window_scores(z, groups, scorer.window, scorer.stride)
-    return [
-        (scorer.window + i * scorer.stride, calibrated_trust(s, scorer.calibration))
-        for i, s in enumerate(scores)
-    ]
-
-
-def false_locks(values, window, threshold, grace):
-    """Locks during the owner's own typing; after each, the engine and window reset."""
-    engine = TrustEngine(threshold, grace)
-    count, resume_at = 0, 0
-    for end, trust in values:
-        if end < resume_at:
-            continue  # window still refilling after a lock
-        if engine.update("typing", trust, end):
-            count += 1
-            engine.reset()
-            resume_at = end + window
-    return count
-
-
-def first_lock(values, start, threshold, grace, after_quiet):
-    """Keystrokes from `start` to the first lock, or None if never locked."""
-    engine = TrustEngine(threshold, grace)
-    if after_quiet:
-        engine.update("typing", 1.0, -1_000_000)  # old evidence, long ago
-    for end, trust in values:
-        if end <= start:
-            continue
-        if engine.update("typing", trust, end):
-            return end - start
-    return None
 
 
 start_time = time.perf_counter()
