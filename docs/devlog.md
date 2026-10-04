@@ -5,6 +5,46 @@ Newest entry at the top. Only put numbers here that I actually measured.
 
 ---
 
+## 2026-10-03: Tuning tools, shuffle-bias check, threat model, collection
+
+### Built
+- **Privacy and threat model** (`docs/privacy-threat-model.md`): one page covering what is protected, five attackers, six privacy rules, what still leaks or gets through, and "why not idle lock / Dynamic Lock / BitLocker".
+- **Lock-tuning module** (`src/doppel/tuning.py`, `scripts/tuning_test.py`):
+  - The replay helpers moved out of `lock_simulation.py`. A 50-owner rerun gave output identical to before the move.
+  - New: `false_lock_limit()` turns a per-day target into a per-1,000-keystroke limit, and `choose_setting()` picks the threshold and grace that catch the most impostors within that limit.
+  - The checks use hand-worked values, and both key checks were confirmed to fail when the code is broken.
+- **Owner tuning script** (`scripts/owner_tuning.py`), built ahead of the data. It splits my stored typing by time (oldest 70% builds the scorer the way the app does, newest 30% counts false locks), scores Aalto participants as impostors, and picks a setting.
+- **Shuffle-bias experiment** (`scripts/shuffle_bias.py`, see Roadblock 2).
+- **Collection:** 6,534 records in 34 batches: 15 batches on 2026-10-01 and 19 on 2026-10-03; none on 2026-10-02, because the listener wasn't started. Median hold 91.9 ms, DD 125.4 ms, UD 26.2 ms.
+- 18 tests pass.
+
+### Roadblock 1: The tuner chose a setting that can never lock
+**Problem:** the first run on my 2,779 records (one day) "chose" threshold 0.002, grace 1, with 0 false locks and 0% of impostors caught.
+
+**Process:** trust can never fall below 1 / (calibration windows + 1). Here that floor was 0.0021, so a 0.002 threshold can never fire, and it "wins" on false locks for a useless reason.
+
+**Result:** a setting must now catch at least one impostor to qualify, and the script skips thresholds at or below the floor. The check fails without the fix. A second limit showed up in the same run: one false lock in 834 test keystrokes already counts as 1.20 per 1,000, above the 0.36 limit. The script now warns when the test part is too short to measure the limit.
+
+### Roadblock 2: Does shuffled storage bias calibration?
+**Problem:** stored batches are shuffled for privacy, so windows built from stored data are random mixes, while live windows are contiguous typing. Tuning on stored data might underestimate live false locks.
+
+**Process:** on 995 Aalto owners, whose data keeps its true order, I compared contiguous vs block-shuffled calibration and test streams (window 100, stride 10).
+
+**Result:** false locks per 1,000 at threshold 0.05, grace 3: contiguous/contiguous 2.09, shuffled/shuffled 2.22, shuffled calibration with contiguous test 2.32. The live-style case had +1.8 points more owner trust values below 0.05 than shuffled/shuffled (95% interval +0.6 to +3.0). The effect is real but small, so shuffling stays. Bigger issue: about 30% of owner values fall below 0.05 on Aalto, where about 5% would be expected.
+
+### Design decisions
+- **Keep batch shuffling.** The bias it adds is small, and typing order would reveal word lengths. Tune with some margin, then confirm with a multi-day dry run, whose WOULD LOCK count per day is the direct measure.
+- **Accept the typing-volume leak for now.** The plaintext day plus the row count show roughly how much I typed each day, to within 200 records. It's documented as a known gap.
+
+### Open items
+- Keep collecting until 1–2 weeks and about 20,000+ records; restart the listener after every reboot.
+- Record keystrokes for one full day, then run `owner_tuning.py --per-day N`.
+- Multi-day dry run, then the real `--lock` live test.
+- Measuring hook timestamp jitter still needs a method (Windows' event timestamps are only accurate to about 10–16 ms).
+- Make the repo public (history checked clean), then the first resume bullets.
+
+---
+
 ## 2026-10-01: Review, key identity, validated evaluation, label experiment, stronger scorer, trust engine and dry-run app
 
 ### Built
