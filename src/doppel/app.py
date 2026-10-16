@@ -39,6 +39,7 @@ Usage:
     uv run python -m doppel.app                       dry run, profile from data/doppel.db
     uv run python -m doppel.app --profile A.db B.db   build the profile from these databases
     uv run python -m doppel.app --quiet               do not print trust values
+    uv run python -m doppel.app --skip-day 2026-10-05 leave a day out of the profile
     uv run python -m doppel.app --lock                really lock (only after tuning)
 """
 
@@ -47,7 +48,7 @@ import ctypes
 import queue
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from pathlib import Path
 
 from doppel.keystore import get_or_create_key
@@ -70,16 +71,19 @@ def lock_workstation() -> None:
         raise OSError("LockWorkStation failed")
 
 
-def load_records(key: bytes, paths: list[Path]) -> list[KeystrokeRecord]:
+def load_records(
+    key: bytes, paths: list[Path], skip_days: Collection[str] = ()
+) -> list[KeystrokeRecord]:
     """Decrypt and concatenate the records of several databases, in order.
 
     List older databases first, so the time-ordered train/calibration split
-    in build_typing_scorer stays in time order.
+    in build_typing_scorer stays in time order. Batches from skip_days
+    ("YYYY-MM-DD") are left out, e.g. days typed on a different keyboard.
     """
     records: list[KeystrokeRecord] = []
     for path in paths:
         store = RecordStore(key, path)
-        records += store.load_all()
+        records += store.load_all(skip_days)
         store.close()
     return records
 
@@ -148,17 +152,19 @@ def run_app(
     store_path: Path = DB_PATH,
     lock_screen: bool = False,
     echo: bool = True,
+    skip_days: Collection[str] = (),
 ) -> None:
     """Run the live app until Ctrl+C.
 
     Args:
         profile_paths: databases holding the owner's typing, oldest first.
+        skip_days: days left out of the profile (e.g. another keyboard).
         store_path: where new records are stored.
         lock_screen: really lock; False = dry run (print WOULD LOCK).
         echo: print every trust value.
     """
     key = get_or_create_key()
-    records = load_records(key, profile_paths)
+    records = load_records(key, profile_paths, skip_days)
     scorer = build_typing_scorer(records)
     engine = TrustEngine()
     print(
@@ -221,5 +227,8 @@ if __name__ == "__main__":
                         help=f"where new records are stored (default: {DB_PATH})")
     parser.add_argument("--lock", action="store_true", help="really lock the screen (only after tuning)")
     parser.add_argument("--quiet", action="store_true", help="do not print trust values")
+    parser.add_argument("--skip-day", action="append", default=[], metavar="YYYY-MM-DD",
+                        help="leave this day out of the profile (repeatable)")
     args = parser.parse_args()
-    run_app(args.profile, args.store, lock_screen=args.lock, echo=not args.quiet)
+    run_app(args.profile, args.store, lock_screen=args.lock, echo=not args.quiet,
+            skip_days=args.skip_day)

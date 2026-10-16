@@ -24,6 +24,7 @@ keyboards, so catch rates are optimistic. Prints aggregates only, never a
 record. Run from the project folder:
 
     uv run python scripts/owner_tuning.py [--db PATH] [--per-day N] [--impostors N]
+                                          [--skip-day YYYY-MM-DD ...]
 """
 
 import argparse
@@ -56,14 +57,19 @@ parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
 parser.add_argument("--db", type=Path, default=DB_PATH)
 parser.add_argument("--per-day", type=float, help="owner keystrokes per day")
 parser.add_argument("--impostors", type=int, default=200, help="Aalto impostors")
+parser.add_argument("--skip-day", action="append", default=[], metavar="YYYY-MM-DD",
+                    help="leave this day out, e.g. typed on another keyboard (repeatable)")
 args = parser.parse_args()
 
 # 1. The owner's records, oldest first, and how many collection days.
 key = get_or_create_key()
-records = load_records(key, [args.db])
+records = load_records(key, [args.db], args.skip_day)
 store = RecordStore(key, args.db)
-days = store.conn.execute("SELECT COUNT(DISTINCT day) FROM batches").fetchone()[0]
+all_days = {day for (day,) in store.conn.execute("SELECT DISTINCT day FROM batches")}
 store.close()
+days = len(all_days - set(args.skip_day))
+if args.skip_day:
+    print(f"Skipped days: {', '.join(sorted(args.skip_day))}")
 per_day = args.per_day or len(records) / days
 limit = false_lock_limit(per_day, LOCKS_PER_DAY)
 

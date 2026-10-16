@@ -2,7 +2,8 @@
 
 Writes records in small batches to a temporary database, reads them back,
 and confirms that the file holds no readable timings, that a wrong key
-fails, and that changing a row's day is detected.
+fails, that changing a row's day is detected, and that skip_days leaves
+a day's rows out without decrypting them.
 Run from the project folder, since the database path is relative.
 """
 
@@ -70,6 +71,13 @@ try:
     raise AssertionError("changing the day should be detected")
 except InvalidTag:
     pass
+
+# Skipped days are left out before decryption: row 1 (the first three
+# records) now has a tampered day, so skipping that day must succeed and
+# return only row 2's two records.
+skipped = store.load_all(skip_days={"2000-01-01"})
+assert len(skipped) == 2
+assert set(skipped) == set(originals[3:])
 store.close()
 
 path.unlink()  # clean up

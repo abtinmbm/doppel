@@ -18,7 +18,8 @@ How it works:
           decryption fails if it is changed.
        d. Inserts one row (day, nonce, data) and empties the buffer.
     3. load_all() reads every row, decrypts it with its own nonce and day,
-       and converts the JSON back into KeystrokeRecords.
+       and converts the JSON back into KeystrokeRecords. Rows from days in
+       skip_days are passed over before decryption.
 
 Stored unencrypted: the row id, the day and the nonce. Batch contents are
 encrypted and authenticated, so changing the data, nonce or day makes
@@ -29,6 +30,7 @@ import json
 import os
 import secrets
 import sqlite3
+from collections.abc import Collection
 from datetime import date
 from pathlib import Path
 
@@ -123,8 +125,12 @@ class RecordStore:
         self.conn.commit()
         self.buffer = []
 
-    def load_all(self) -> list[KeystrokeRecord]:
+    def load_all(self, skip_days: Collection[str] = ()) -> list[KeystrokeRecord]:
         """Decrypt every stored batch and return all records.
+
+        Args:
+            skip_days: days ("YYYY-MM-DD") whose batches are left out without
+                being decrypted, e.g. days typed on a different keyboard.
 
         Raises:
             cryptography.exceptions.InvalidTag: if the key is wrong or any
@@ -133,6 +139,8 @@ class RecordStore:
         records = []
         rows = self.conn.execute("SELECT day, nonce, data FROM batches ORDER BY id")
         for day, nonce, data in rows:
+            if day in skip_days:
+                continue
             plaintext = self.aes.decrypt(nonce, data, day.encode("utf-8"))
             for row in json.loads(plaintext):
                 records.append(_row_to_record(row))
