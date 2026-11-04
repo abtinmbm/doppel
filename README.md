@@ -4,7 +4,7 @@
 
 **Continuous authentication for Windows: it learns how you type and locks the screen when someone else is at the keyboard.**
 
-> **Status:** Finished, no longer in development. The typing pipeline works end to end in a dry-run mode. Lock thresholds were never tuned on enough of the owner's own typing, so no accuracy claims are made for the live system, and the later stages (writing style, attacks, mouse) were dropped. Every number below was measured and is labelled with what it measures.
+> **Status:** Finished, no longer in development. The typing pipeline works end to end in a dry-run mode. Lock settings were tuned once on the owner's stored typing but never confirmed in a live run, so no accuracy claims are made for the live system, and the later stages (writing style, attacks, mouse) were dropped. Every number below was measured and is labelled with what it measures.
 
 ---
 
@@ -143,7 +143,7 @@ uv run python scripts/db_summary.py          # aggregates only, never a record
 # Live app, dry run: prints trust values and WOULD LOCK, never locks
 uv run python -m doppel.app
 
-# Real locking (thresholds never tuned on owner data)
+# Real locking (settings never confirmed in a live run)
 uv run python -m doppel.app --lock
 ```
 
@@ -180,14 +180,14 @@ Each module starts with a "How it works" section explaining its algorithm step b
 
 - One owner, one machine; accuracy claims rest on public datasets and consenting impostors.
 - Dataset results (browser timing at 1 ms, typed in one sitting) are likely optimistic compared with real use across days and keyboards.
-- Thresholds were never tuned on owner data (6,534 records were collected, short of the roughly 20,000 planned); the dry run shows the mechanism, not final accuracy.
+- Lock settings were tuned once on stored owner typing (25,923 records over 8 days) but never confirmed in a multi-day live run or a real locking test; the dry run shows the mechanism, not final accuracy.
 - Keyboard geometry assumes a QWERTY layout.
 - A typing signal cannot see someone who only reads or scrolls.
 - **Profile poisoning is limited, not solved.** The live app quarantines new typing and stores it only if every window that judged it matched the owner; on 198 Aalto owners this let 11.2% of impostor typing through at keep threshold 0.05 and 1.9% at 0.2, while keeping 53.2% and 43.2% of owners' typing. Typing the detector cannot tell apart from the owner's still gets through.
 
 ## Where it stopped
 
-1. **Typing, end to end** (done as a dry run): collector ✓, evaluation validated on CMU ✓, label chosen on Aalto ✓, encrypted collection ✓, trust engine and dry-run app ✓. Not done: tuning on owner data and a real locking test.
+1. **Typing, end to end** (done as a dry run): collector ✓, evaluation validated on CMU ✓, label chosen on Aalto ✓, encrypted collection ✓, trust engine and dry-run app ✓. Lock settings tuned once on stored owner typing ✓. Not done: a multi-day live dry run and a real locking test.
 
 These later stages were planned and then dropped:
 
