@@ -4,7 +4,7 @@
 
 **Continuous authentication for Windows: it learns how you type and locks the screen when someone else is at the keyboard.**
 
-> **Status:** Milestone 1 (typing) in progress. The full pipeline runs live in a dry-run mode; lock thresholds are being tuned on the owner's own collected typing. No accuracy claims are made for the live system yet. Every number below was measured and is labelled with what it measures.
+> **Status:** Finished, no longer in development. The typing pipeline works end to end in a dry-run mode. Lock thresholds were never tuned on enough of the owner's own typing, so no accuracy claims are made for the live system, and the later stages (writing style, attacks, mouse) were dropped. Every number below was measured and is labelled with what it measures.
 
 ---
 
@@ -67,9 +67,9 @@ Doppel must not become a keylogger. These rules are enforced in code:
 | Thief with the laptop or a copy of the files | Files only | AES-GCM + DPAPI-protected key |
 | Malware running as the owner | Everything the owner has | Out of scope (it could log keys directly) |
 
-**Known gaps:** someone at the session can end the process; reading or scrolling without typing is invisible to a typing signal (evidence expiry mitigates, a mouse signal is planned); anything done before the lock gets through; the DPAPI key can become unrecoverable after an administrator password reset.
+**Known gaps:** someone at the session can end the process; reading or scrolling without typing is invisible to a typing signal (evidence expiry mitigates; a mouse signal was planned but dropped); anything done before the lock gets through; the DPAPI key can become unrecoverable after an administrator password reset.
 
-## Results so far
+## Results
 
 All numbers below are measured with the scripts named. Dataset results compare *methods*; they are not Doppel's accuracy on a real laptop.
 
@@ -143,7 +143,7 @@ uv run python scripts/db_summary.py          # aggregates only, never a record
 # Live app, dry run: prints trust values and WOULD LOCK, never locks
 uv run python -m doppel.app
 
-# Real locking (only after tuning)
+# Real locking (thresholds never tuned on owner data)
 uv run python -m doppel.app --lock
 ```
 
@@ -178,16 +178,19 @@ Each module starts with a "How it works" section explaining its algorithm step b
 
 ## Limitations
 
-- One owner, one machine so far; accuracy claims rest on public datasets and consenting impostors.
+- One owner, one machine; accuracy claims rest on public datasets and consenting impostors.
 - Dataset results (browser timing at 1 ms, typed in one sitting) are likely optimistic compared with real use across days and keyboards.
-- Thresholds are not yet tuned on owner data; the dry run shows the mechanism, not final accuracy.
+- Thresholds were never tuned on owner data (6,534 records were collected, short of the roughly 20,000 planned); the dry run shows the mechanism, not final accuracy.
 - Keyboard geometry assumes a QWERTY layout.
 - A typing signal cannot see someone who only reads or scrolls.
 - **Profile poisoning is limited, not solved.** The live app quarantines new typing and stores it only if every window that judged it matched the owner; on 198 Aalto owners this let 11.2% of impostor typing through at keep threshold 0.05 and 1.9% at 0.2, while keeping 53.2% and 43.2% of owners' typing. Typing the detector cannot tell apart from the owner's still gets through.
 
-## Roadmap
+## Where it stopped
 
-1. **Typing, end to end** (in progress): collector ✓, evaluation validated on CMU ✓, label chosen on Aalto ✓, encrypted collection ✓, trust engine and dry-run app ✓, tuning on owner data, real locking.
+1. **Typing, end to end** (done as a dry run): collector ✓, evaluation validated on CMU ✓, label chosen on Aalto ✓, encrypted collection ✓, trust engine and dry-run app ✓. Not done: tuning on owner data and a real locking test.
+
+These later stages were planned and then dropped:
+
 2. **Writing style** (offline only): can a model tell the owner apart from an LLM imitating them?
 3. **Attacks:** imitation by a person, replay and synthetic timings, LLM style mimicry, killing the app; defenses (such as detecting injected keystrokes) and their measured effect.
 4. **Mouse / trackpad** as a second signal fused into the same trust score.

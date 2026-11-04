@@ -19,7 +19,7 @@ One page: what Doppel protects, from whom, how, and what it does not stop.
 | **Person at the unlocked PC** (the brother) | Keyboard and screen of the live session | Use the session | Typing scorer → trust engine → `LockWorkStation`. After a quiet period, evidence expires and the first low trust value locks |
 | **Same person, long term** | Repeated access before each lock | Poison the profile so their typing is accepted | Quarantine: live records are stored only if every window that judged them looked like the owner; everything pending is dropped on a lock |
 | **Thief / file copier** | `data/` folder, backups | Read the timing data | AES-GCM per batch, key protected by DPAPI (tied to the owner's Windows login); batches shuffled, so even decrypted data has no typing order |
-| **Software replay** | Code running in the session | Fake the owner's rhythm | Planned: reject injected events (`LLKHF_INJECTED`) |
+| **Software replay** | Code running in the session | Fake the owner's rhythm | Not built: rejecting injected events (`LLKHF_INJECTED`) was planned but dropped |
 | **Malware running as the owner** | Everything the owner has | Anything | **Out of scope.** It could log keys directly or decrypt via DPAPI |
 
 ## Privacy rules (enforced in code)
@@ -36,7 +36,7 @@ One page: what Doppel protects, from whom, how, and what it does not stop.
 - **Typing volume per day is visible without the key.** The plaintext day column and the row count let anyone with the file read roughly how much the owner typed each day (to within one 200-record batch).
 - **Decrypted label counts give coarse statistics.** For example, the number of space pairs approximates the number of words typed. The content stays hidden.
 - **The app can be killed.** Anyone at the session can end the Python process in Task Manager (a watchdog is optional future work).
-- **Passive use is invisible.** Reading or scrolling without typing produces no typing evidence; a mouse signal is planned.
+- **Passive use is invisible.** Reading or scrolling without typing produces no typing evidence; a mouse signal was planned but dropped.
 - **Everything before the lock gets through.** The measure of this is keystrokes-until-lock.
 - **Poisoning resistance is capped by the detector.** An impostor the scorer cannot tell apart from the owner passes the quarantine as well.
 - **Hardware replay** (a USB device acting as a keyboard) is not flagged by Windows; it needs statistical defenses.
